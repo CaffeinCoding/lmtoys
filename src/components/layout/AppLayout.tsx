@@ -2,6 +2,7 @@ import { Outlet, Link, useLocation } from "react-router-dom";
 import { FileText, Database, Settings as SettingsIcon, Moon, Sun, Monitor } from "lucide-react";
 import { useTheme } from "../theme-provider";
 import { Button } from "../ui/button";
+import { MemoryIndicator } from "../MemoryIndicator";
 
 export default function AppLayout() {
   const { pathname } = useLocation();
@@ -38,18 +39,22 @@ export default function AppLayout() {
           ))}
         </nav>
 
-        <div className="p-4 border-t flex items-center justify-between">
-          <span className="text-sm text-muted-foreground font-medium">Theme</span>
-          <div className="flex gap-1 bg-muted p-1 rounded-lg">
-            <Button variant={theme === 'light' ? 'default' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setTheme('light')}>
-              <Sun size={16} />
-            </Button>
-            <Button variant={theme === 'dark' ? 'default' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setTheme('dark')}>
-              <Moon size={16} />
-            </Button>
-            <Button variant={theme === 'system' ? 'default' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setTheme('system')}>
-              <Monitor size={16} />
-            </Button>
+        <div className="p-4 flex flex-col gap-4 border-t">
+          <MemoryIndicator />
+          
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground font-medium">Theme</span>
+            <div className="flex gap-1 bg-muted p-1 rounded-lg">
+              <Button variant={theme === 'light' ? 'default' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setTheme('light')}>
+                <Sun size={16} />
+              </Button>
+              <Button variant={theme === 'dark' ? 'default' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setTheme('dark')}>
+                <Moon size={16} />
+              </Button>
+              <Button variant={theme === 'system' ? 'default' : 'ghost'} size="icon" className="h-8 w-8" onClick={() => setTheme('system')}>
+                <Monitor size={16} />
+              </Button>
+            </div>
           </div>
         </div>
       </aside>
