@@ -4,12 +4,22 @@ use tauri::Emitter;
 use futures_util::StreamExt;
 use std::fs::File;
 use std::io::Write;
+use candle_core::{Device, Tensor};
+use candle_transformers::generation::LogitsProcessor;
+use tokenizers::Tokenizer;
 
 #[derive(Clone, serde::Serialize)]
 struct DownloadProgress {
     filename: String,
     downloaded: u64,
     total: Option<u64>,
+}
+
+#[derive(serde::Serialize)]
+struct GgufMetadata {
+    architecture: String,
+    context_length: u64,
+    has_vision: bool,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -69,14 +79,23 @@ async fn extract_pdf_text(file_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn download_model(url: String, path: String, filename: String, app: tauri::AppHandle) -> Result<(), String> {
+async fn download_model(url: String, path: String, filename: String, token: Option<String>, app: tauri::AppHandle) -> Result<(), String> {
     let mut dest_path = PathBuf::from(&path);
     if !dest_path.exists() {
         std::fs::create_dir_all(&dest_path).map_err(|e| e.to_string())?;
     }
     dest_path.push(&filename);
     
-    let res = reqwest::get(&url).await.map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
+    let mut request = client.get(&url);
+    
+    if let Some(t) = token {
+        if !t.is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", t));
+        }
+    }
+
+    let res = request.send().await.map_err(|e| e.to_string())?;
     let total_size = res.content_length();
     
     let mut file = File::create(&dest_path).map_err(|e| e.to_string())?;
@@ -139,11 +158,199 @@ fn get_downloaded_models(path: String) -> Result<Vec<String>, String> {
 #[tauri::command]
 fn delete_model(path: String, filename: String) -> Result<(), String> {
     let mut dest_path = PathBuf::from(&path);
-    dest_path.push(filename);
+    dest_path.push(&filename);
     if dest_path.exists() {
-        std::fs::remove_file(dest_path).map_err(|e| e.to_string())?;
+        std::fs::remove_file(&dest_path).map_err(|e| e.to_string())?;
+    }
+    // 연관된 토크나이저 파일도 함께 삭제
+    let mut tokenizer_path = PathBuf::from(&path);
+    tokenizer_path.push(format!("{}.tokenizer.json", filename));
+    if tokenizer_path.exists() {
+        std::fs::remove_file(tokenizer_path).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn get_all_files_in_dir(path: String) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+    let dir = std::path::Path::new(&path);
+    if dir.exists() && dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_file() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        files.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+#[tauri::command]
+fn get_gguf_metadata(path: String, filename: String) -> Result<GgufMetadata, String> {
+    let mut dest_path = PathBuf::from(&path);
+    dest_path.push(filename);
+    
+    let mut file = File::open(&dest_path).map_err(|e| e.to_string())?;
+    
+    // Candle's GGUF parser
+    let content = candle_core::quantized::gguf_file::Content::read(&mut file).map_err(|e| e.to_string())?;
+    
+    let mut architecture = String::from("unknown");
+    let mut context_length = 4096;
+    let mut has_vision = false;
+    
+    if let Some(arch) = content.metadata.get("general.architecture") {
+        if let candle_core::quantized::gguf_file::Value::String(s) = arch {
+            architecture = s.clone();
+            
+            let ctx_key = format!("{}.context_length", architecture);
+            if let Some(ctx) = content.metadata.get(&ctx_key) {
+                match ctx {
+                    candle_core::quantized::gguf_file::Value::U32(v) => context_length = *v as u64,
+                    candle_core::quantized::gguf_file::Value::U64(v) => context_length = *v,
+                    _ => {}
+                }
+            }
+        }
+    }
+    
+    let arch_lower = architecture.to_lowercase();
+    if arch_lower.contains("llava") || arch_lower.contains("vl") || arch_lower.contains("qwen-vl") {
+        has_vision = true;
+    }
+    
+    Ok(GgufMetadata {
+        architecture,
+        context_length,
+        has_vision,
+    })
+}
+
+#[tauri::command]
+async fn run_builtin_model(
+    path: String,
+    filename: String,
+    prompt: String,
+    temperature: f64,
+    top_p: f64,
+    max_tokens: usize,
+) -> Result<String, String> {
+    let mut model_path = PathBuf::from(&path);
+    model_path.push(&filename);
+    
+    let mut tokenizer_path = PathBuf::from(&path);
+    tokenizer_path.push(format!("{}.tokenizer.json", filename));
+
+    if !tokenizer_path.exists() {
+        return Err("Tokenizer not found. Please visit Settings, delete the model, and re-download it to fetch the tokenizer.".into());
+    }
+
+    let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| e.to_string())?;
+
+    let mut file = std::fs::File::open(&model_path).map_err(|e| e.to_string())?;
+    let content = candle_core::quantized::gguf_file::Content::read(&mut file).map_err(|e| {
+        if e.to_string().contains("unknown dtype") {
+            format!("Unsupported GGUF tensor type found. This model might be using imatrix (IQ) or UD quantization which is not yet supported by Candle. Please try a standard Q4_K_M or Q8_0 model from a different provider (e.g., bartowski). Original error: {}", e)
+        } else {
+            e.to_string()
+        }
+    })?;
+
+    // Detect architecture from GGUF metadata
+    let architecture = content.metadata.get("general.architecture")
+        .and_then(|v| {
+            if let candle_core::quantized::gguf_file::Value::String(s) = v { Some(s.clone()) } else { None }
+        })
+        .unwrap_or_else(|| "llama".to_string())
+        .to_lowercase();
+
+    let seed = 299792458;
+    let temp = if temperature <= 0.0 { None } else { Some(temperature) };
+    let top_p_opt = if top_p <= 0.0 || top_p >= 1.0 { None } else { Some(top_p) };
+    let mut logits_processor = LogitsProcessor::new(seed, temp, top_p_opt);
+
+    let tokens = tokenizer.encode(prompt, true).map_err(|e| e.to_string())?;
+    let mut tokens = tokens.get_ids().to_vec();
+
+    // Multi-architecture enum dispatch
+    enum ModelArch {
+        Llama(candle_transformers::models::quantized_llama::ModelWeights),
+        Phi(candle_transformers::models::quantized_phi::ModelWeights),
+        Phi3(candle_transformers::models::quantized_phi3::ModelWeights),
+        Qwen2(candle_transformers::models::quantized_qwen2::ModelWeights),
+    }
+
+    let supported_archs = ["llama", "gemma", "gemma2", "gemma3", "gemma4", "phi", "phi2", "phi3", "qwen", "qwen2", "qwen2moe", "starcoder2", "internlm2"];
+
+    let mut model = match architecture.as_str() {
+        // Llama family: llama, gemma, gemma2, gemma3, gemma4, internlm2, starcoder2 all use the quantized_llama loader
+        "llama" | "gemma" | "gemma2" | "gemma3" | "gemma4" | "internlm2" | "starcoder2" => {
+            let m = candle_transformers::models::quantized_llama::ModelWeights::from_gguf(content, &mut file, &Device::Cpu)
+                .map_err(|e| format!("Failed to load model as Llama-compatible (arch: {}): {}", architecture, e))?;
+            ModelArch::Llama(m)
+        },
+        // Phi-2 family
+        "phi" | "phi2" => {
+            let m = candle_transformers::models::quantized_phi::ModelWeights::from_gguf(content, &mut file, &Device::Cpu)
+                .map_err(|e| format!("Failed to load model as Phi (arch: {}): {}", architecture, e))?;
+            ModelArch::Phi(m)
+        },
+        // Phi-3 family
+        "phi3" => {
+            let m = candle_transformers::models::quantized_phi3::ModelWeights::from_gguf(false, content, &mut file, &Device::Cpu)
+                .map_err(|e| format!("Failed to load model as Phi3 (arch: {}): {}", architecture, e))?;
+            ModelArch::Phi3(m)
+        },
+        // Qwen2 family
+        "qwen" | "qwen2" | "qwen2moe" => {
+            let m = candle_transformers::models::quantized_qwen2::ModelWeights::from_gguf(content, &mut file, &Device::Cpu)
+                .map_err(|e| format!("Failed to load model as Qwen2 (arch: {}): {}", architecture, e))?;
+            ModelArch::Qwen2(m)
+        },
+        _ => {
+            return Err(format!(
+                "Unsupported model architecture: '{}'. Supported architectures: {:?}. \
+                You can still use this model via Ollama or LM Studio.",
+                architecture, supported_archs
+            ));
+        }
+    };
+
+    let mut generated_text = String::new();
+
+    // Unified inference loop — all architectures share the same forward(input, pos) -> logits signature
+    for index in 0..max_tokens {
+        let context_size = if index > 0 { 1 } else { tokens.len() };
+        let start_pos = tokens.len().saturating_sub(context_size);
+        
+        let input = Tensor::new(&tokens[start_pos..], &Device::Cpu)
+            .map_err(|e| e.to_string())?
+            .unsqueeze(0)
+            .map_err(|e| e.to_string())?;
+        
+        let logits = match &mut model {
+            ModelArch::Llama(m) => m.forward(&input, start_pos),
+            ModelArch::Phi(m) => m.forward(&input, start_pos),
+            ModelArch::Phi3(m) => m.forward(&input, start_pos),
+            ModelArch::Qwen2(m) => m.forward(&input, start_pos),
+        }.map_err(|e| e.to_string())?;
+
+        let logits = logits.squeeze(0).map_err(|e| e.to_string())?;
+        let logits = logits.squeeze(0).map_err(|e| e.to_string())?;
+        
+        let next_token = logits_processor.sample(&logits).map_err(|e| e.to_string())?;
+        tokens.push(next_token);
+        
+        if let Some(text) = tokenizer.decode(&[next_token], false).ok() {
+            generated_text.push_str(&text);
+        }
+    }
+
+    Ok(generated_text)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -160,7 +367,10 @@ pub fn run() {
             extract_pdf_text,
             download_model,
             get_downloaded_models,
-            delete_model
+            delete_model,
+            get_all_files_in_dir,
+            get_gguf_metadata,
+            run_builtin_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAppStore } from "@/store/useAppStore";
 import { Loader2, Upload, FileText, Settings2, Search } from "lucide-react";
@@ -56,7 +57,8 @@ export default function Home() {
         temperature, setTemperature,
         maxTokens, setMaxTokens,
         topK, setTopK,
-        topP, setTopP
+        topP, setTopP,
+        cloudProvider, setCloudProvider
     } = useAppStore();
     const [pdfFile, setPdfFile] = useState<string | null>(null);
     const [numPages, setNumPages] = useState<number>();
@@ -66,11 +68,31 @@ export default function Home() {
     const [isExtracting, setIsExtracting] = useState(false);
     const [extractedText, setExtractedText] = useState("");
     const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
+    const [builtInMetadata, setBuiltInMetadata] = useState<any | null>(null);
+
+    useEffect(() => {
+        if (provider === "builtin" && modelDownloadPath && builtInModel) {
+            invoke("get_gguf_metadata", { path: modelDownloadPath, filename: builtInModel })
+                .then(setBuiltInMetadata)
+                .catch(err => {
+                    console.error("Failed to parse GGUF metadata", err);
+                    setBuiltInMetadata(null);
+                });
+        } else {
+            setBuiltInMetadata(null);
+        }
+    }, [provider, modelDownloadPath, builtInModel]);
 
     useEffect(() => {
         if (provider === "builtin" && modelDownloadPath) {
             invoke<string[]>("get_downloaded_models", { path: modelDownloadPath })
-                .then(setDownloadedModels)
+                .then((models) => {
+                    setDownloadedModels(models);
+                    // 자동 선택: builtInModel이 null이거나 목록에 없으면 첫 번째 모델 자동 선택
+                    if (models.length > 0 && (!builtInModel || !models.includes(builtInModel))) {
+                        setBuiltInModel(models[0]);
+                    }
+                })
                 .catch(console.error);
         }
     }, [provider, modelDownloadPath]);
@@ -145,12 +167,105 @@ ${text}
 
             let response;
             if (llmMode === "cloud") {
-                // Placeholder for Cloud LLM (e.g. OpenAI)
-                throw new Error("Cloud LLM integration is not yet implemented.");
+                const gKey = await store.get<string>("geminiKey");
+                const oKey = await store.get<string>("openAiKey");
+                const cKey = await store.get<string>("claudeKey");
+
+                if (cloudProvider === "openai") {
+                    if (!oKey) throw new Error("OpenAI API key is missing. Please configure it in Settings.");
+                    response = await fetch("https://api.openai.com/v1/chat/completions", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Authorization": `Bearer ${oKey}`
+                        },
+                        body: JSON.stringify({
+                            model: "gpt-4o",
+                            messages: [
+                                { role: "system", content: systemPrompt },
+                                { role: "user", content: promptText }
+                            ],
+                            temperature,
+                            top_p: topP
+                        })
+                    });
+                } else if (cloudProvider === "gemini") {
+                    if (!gKey) throw new Error("Gemini API key is missing. Please configure it in Settings.");
+                    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${gKey}`, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            system_instruction: {
+                                parts: { text: systemPrompt }
+                            },
+                            contents: [{
+                                parts: [{ text: promptText }]
+                            }],
+                            generationConfig: {
+                                temperature,
+                                topP,
+                                topK,
+                                responseMimeType: "application/json"
+                            }
+                        })
+                    });
+                } else if (cloudProvider === "claude") {
+                    if (!cKey) throw new Error("Claude API key is missing. Please configure it in Settings.");
+                    response = await fetch("https://api.anthropic.com/v1/messages", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "x-api-key": cKey,
+                            "anthropic-version": "2023-06-01",
+                            "anthropic-dangerous-direct-browser-access": "true"
+                        },
+                        body: JSON.stringify({
+                            model: "claude-3-5-sonnet-20241022",
+                            system: systemPrompt,
+                            messages: [
+                                { role: "user", content: promptText }
+                            ],
+                            temperature,
+                            top_p: topP,
+                            max_tokens: 4096 // Claude requires max_tokens
+                        })
+                    });
+                } else {
+                    throw new Error("Unknown cloud provider selected.");
+                }
             } else if (provider === "builtin") {
-                // Placeholder for Candle Built-in execution
+                // 3. Candle Built-in 로컬 추론 실행
                 if (!builtInModel) throw new Error("Please select a built-in model.");
-                throw new Error("Built-in model execution with Candle is pending implementation.");
+                if (!modelDownloadPath) throw new Error("Model download path is not configured.");
+
+                const fullPrompt = `${systemPrompt}\n\nUser Request: ${promptText}`;
+                const builtinResult = await invoke<string>("run_builtin_model", {
+                    path: modelDownloadPath,
+                    filename: builtInModel,
+                    prompt: fullPrompt,
+                    temperature,
+                    topP,
+                    maxTokens,
+                });
+
+                // Built-in은 invoke로 직접 텍스트를 반환하므로 별도 파싱
+                const cleanedBuiltin = builtinResult
+                    .replace(/```json/gi, "")
+                    .replace(/```/g, "")
+                    .trim();
+                let parsedData;
+                try {
+                    parsedData = JSON.parse(cleanedBuiltin);
+                } catch (e) {
+                    throw new Error(`Failed to parse JSON from built-in model:\n${builtinResult}`);
+                }
+                setExtractedData(
+                    Array.isArray(parsedData) ? parsedData : [parsedData],
+                );
+                setIsExtracting(false);
+                return; // 여기서 종료 — fetch 기반 흐름을 건너뜀
             } else if (provider === "ollama") {
                 // 3a. Ollama API로 전송
                 response = await fetch(`${ollamaUrl}/api/generate`, {
@@ -200,22 +315,32 @@ ${text}
             const result = await response.json();
 
             // 4. JSON 파싱 및 스토어 저장
-            const rawResponseText =
-                provider === "ollama"
+            let rawResponseText = "";
+            if (llmMode === "cloud") {
+                if (cloudProvider === "openai") {
+                    rawResponseText = result.choices[0].message.content;
+                } else if (cloudProvider === "gemini") {
+                    rawResponseText = result.candidates[0].content.parts[0].text;
+                } else if (cloudProvider === "claude") {
+                    rawResponseText = result.content[0].text;
+                }
+            } else {
+                rawResponseText = provider === "ollama"
                     ? result.response
                     : result.choices[0].message.content;
+            }
 
             let parsedData;
             try {
-                // LM Studio might wrap JSON in markdown block, so we strip it if present
+                // Remove markdown blocks (e.g., ```json ... ```)
                 const cleanedText = rawResponseText
-                    .replace(/```json/g, "")
+                    .replace(/```json/gi, "")
                     .replace(/```/g, "")
                     .trim();
                 parsedData = JSON.parse(cleanedText);
             } catch (e) {
                 throw new Error(
-                    `Failed to parse JSON response: ${rawResponseText}`,
+                    `Failed to parse JSON response: \n${rawResponseText}`,
                 );
             }
 
@@ -229,9 +354,22 @@ ${text}
             navigate("/data");
         } catch (err: any) {
             console.error("Failed to extract data:", err);
-            setExtractedText(
-                `Error during extraction: ${err.message}\n\nPlease check if your local Ollama server is running and the model '${modelName}' is installed.`,
-            );
+            const errorMsg = typeof err === "string" ? err : (err?.message || String(err));
+            
+            let hint = "";
+            if (llmMode === "local") {
+                if (provider === "builtin") {
+                    hint = "\n\nBuilt-in 모델 추론 중 오류가 발생했습니다. 모델 파일이 손상되었거나 지원되지 않는 아키텍처일 수 있습니다.";
+                } else if (provider === "ollama") {
+                    hint = `\n\nOllama 서버가 실행 중인지, 모델 '${modelName}'이(가) 설치되어 있는지 확인해 주세요.`;
+                } else {
+                    hint = `\n\nLM Studio 서버가 실행 중인지, 모델이 로드되어 있는지 확인해 주세요.`;
+                }
+            } else {
+                hint = "\n\nAPI 키가 올바르게 설정되어 있는지 Settings에서 확인해 주세요.";
+            }
+            
+            setExtractedText(`Error during extraction: ${errorMsg}${hint}`);
         } finally {
             setIsExtracting(false);
         }
@@ -246,12 +384,12 @@ ${text}
         [searchText]
     );
 
-    const maxTokensLimit = llmMode === "local" ? (provider === "builtin" ? 131072 : 262144) : 8192;
+    const maxTokensLimit = llmMode === "local" ? (provider === "builtin" ? (builtInMetadata?.context_length || 131072) : 262144) : 8192;
 
     return (
-        <div className="p-6 h-full flex gap-6">
+        <div className="p-4 sm:p-6 flex flex-col lg:flex-row gap-6 items-start">
             {/* Left Panel: Viewer */}
-            <Card className="flex-1 flex flex-col overflow-hidden">
+            <Card className="flex-1 flex flex-col w-full min-h-[60vh] lg:min-h-[calc(100vh-3rem)] lg:sticky lg:top-6 overflow-hidden">
                 <CardHeader className="py-4 border-b">
                     <CardTitle className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-lg w-full">
                         <span>PDF Viewer</span>
@@ -354,8 +492,8 @@ ${text}
             </Card>
 
             {/* Right Panel: Controls & Extraction */}
-            <div className="w-[400px] flex flex-col gap-6 overflow-y-auto">
-                <Card>
+            <div className="w-full lg:w-[400px] shrink-0 flex flex-col gap-6 lg:h-[calc(100vh-3rem)] lg:sticky lg:top-6 overflow-y-auto pb-4 pr-1">
+                <Card className="flex-shrink-0">
                     <CardHeader className="py-4">
                         <CardTitle className="text-lg flex items-center gap-2">
                             <Settings2 className="w-5 h-5" />
@@ -420,6 +558,24 @@ ${text}
                                                         No models downloaded. Please visit Settings to download a model.
                                                     </div>
                                                 )}
+                                                {builtInMetadata && (() => {
+                                                    const supportedArchs = ["llama", "gemma", "gemma2", "gemma3", "gemma4", "phi", "phi2", "phi3", "qwen", "qwen2", "qwen2moe", "starcoder2", "internlm2"];
+                                                    const isSupported = supportedArchs.includes(builtInMetadata.architecture.toLowerCase());
+                                                    return (
+                                                        <div className="flex flex-wrap gap-2 pt-1">
+                                                            <span className={`text-xs px-2 py-1 rounded-md border ${isSupported ? "bg-green-500/20 text-green-500 border-green-500/50" : "bg-orange-500/20 text-orange-500 border-orange-500/50"}`}>
+                                                                {isSupported ? "✓" : "⚠"} {builtInMetadata.architecture}
+                                                            </span>
+                                                            <span className="text-xs bg-muted px-2 py-1 rounded-md border">Ctx: {(builtInMetadata.context_length / 1024).toFixed(0)}k</span>
+                                                            {builtInMetadata.has_vision && (
+                                                                <span className="text-xs bg-blue-500/20 text-blue-500 px-2 py-1 rounded-md border border-blue-500/50">Vision</span>
+                                                            )}
+                                                            {!isSupported && (
+                                                                <p className="text-xs text-orange-500 w-full">이 아키텍처는 Candle 내장 엔진에서 직접 지원되지 않습니다. Ollama 또는 LM Studio를 사용해 주세요.</p>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })()}
                                             </div>
                                         ) : (
                                             <div className="space-y-2">
@@ -435,7 +591,11 @@ ${text}
                                 ) : (
                                     <div className="space-y-2">
                                         <Label>Cloud Provider</Label>
-                                        <select className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2">
+                                        <select 
+                                            value={cloudProvider}
+                                            onChange={e => setCloudProvider(e.target.value as any)}
+                                            className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                                        >
                                             <option value="openai">OpenAI (GPT-4o)</option>
                                             <option value="gemini">Google (Gemini 1.5 Pro)</option>
                                             <option value="claude">Anthropic (Claude 3.5 Sonnet)</option>
@@ -445,10 +605,11 @@ ${text}
 
                                 <div className="space-y-2 pt-2 border-t">
                                     <Label>Prompt / Keywords</Label>
-                                    <Input
+                                    <Textarea
                                         value={promptText}
                                         onChange={(e) => setPromptText(e.target.value)}
                                         placeholder="e.g. Extract invoice total and date..."
+                                        className="min-h-[120px] resize-y"
                                     />
                                 </div>
 
@@ -537,7 +698,7 @@ ${text}
                                             Processing with LLM...
                                         </>
                                     ) : (
-                                        "Extract with Local Model"
+                                        "Extract with LLM"
                                     )}
                                 </Button>
                             </TabsContent>
@@ -556,7 +717,7 @@ ${text}
 
                 {/* Temporary Raw Text Viewer for Debugging Phase 3 */}
                 {extractedText && (
-                    <Card className="flex-1 flex flex-col">
+                    <Card className="flex-shrink-0 flex flex-col mb-4">
                         <CardHeader className="py-4">
                             <CardTitle className="text-lg">
                                 Raw Extracted Text
@@ -565,8 +726,8 @@ ${text}
                                 Rust backend parsing result
                             </CardDescription>
                         </CardHeader>
-                        <CardContent className="flex-1 p-0 relative">
-                            <div className="absolute inset-0 p-4 overflow-auto text-xs font-mono bg-muted/30 whitespace-pre-wrap">
+                        <CardContent className="p-0 relative min-h-[200px]">
+                            <div className="absolute inset-0 p-4 overflow-y-auto text-xs font-mono bg-muted/30 whitespace-pre-wrap">
                                 {extractedText}
                             </div>
                         </CardContent>

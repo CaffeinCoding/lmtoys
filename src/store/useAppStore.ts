@@ -9,6 +9,8 @@ interface AppState {
   // Extraction Configuration State
   llmMode: "cloud" | "local";
   setLlmMode: (mode: "cloud" | "local") => void;
+  cloudProvider: "openai" | "gemini" | "claude";
+  setCloudProvider: (provider: "openai" | "gemini" | "claude") => void;
   promptText: string;
   setPromptText: (text: string) => void;
   provider: "ollama" | "lmstudio" | "builtin";
@@ -19,6 +21,8 @@ interface AppState {
   setBuiltInModel: (model: string | null) => void;
   modelDownloadPath: string | null;
   setModelDownloadPath: (path: string | null) => void;
+  hfToken: string | null;
+  setHfToken: (token: string | null) => void;
   
   // Model Parameters
   temperature: number;
@@ -39,6 +43,8 @@ export const useAppStore = create<AppState>((set) => ({
   
   llmMode: "local",
   setLlmMode: (mode) => set({ llmMode: mode }),
+  cloudProvider: "openai",
+  setCloudProvider: (provider) => set({ cloudProvider: provider }),
   promptText: "Extract all key entities and present them as a JSON array.",
   setPromptText: (text) => set({ promptText: text }),
   provider: "ollama",
@@ -49,6 +55,8 @@ export const useAppStore = create<AppState>((set) => ({
   setBuiltInModel: (model) => set({ builtInModel: model }),
   modelDownloadPath: null,
   setModelDownloadPath: (path) => set({ modelDownloadPath: path }),
+  hfToken: null,
+  setHfToken: (token) => set({ hfToken: token }),
   
   temperature: 0.1,
   setTemperature: (temp) => set({ temperature: temp }),
