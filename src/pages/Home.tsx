@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { load } from "@tauri-apps/plugin-store";
 import { appDataDir } from "@tauri-apps/api/path";
 import { useNavigate } from "react-router-dom";
@@ -18,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAppStore } from "@/store/useAppStore";
-import { Loader2, Upload, FileText, Settings2, Search } from "lucide-react";
+import { Loader2, Upload, FileText, Settings2, Search, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -59,7 +60,14 @@ export default function Home() {
         maxTokens, setMaxTokens,
         topK, setTopK,
         topP, setTopP,
-        cloudProvider, setCloudProvider
+        cloudProvider, setCloudProvider,
+        systemPrompt, setSystemPrompt,
+        repeatPenalty, setRepeatPenalty,
+        nGpuLayers, setNGpuLayers,
+        isStreaming, setIsStreaming,
+        tokensPerSecond, setTokensPerSecond,
+        timeToFirstToken, setTimeToFirstToken,
+        parsedPdfText, setParsedPdfText
     } = useAppStore();
     const [pdfFile, setPdfFile] = useState<string | null>(null);
     const [numPages, setNumPages] = useState<number>();
@@ -70,6 +78,7 @@ export default function Home() {
     const [extractedText, setExtractedText] = useState("");
     const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
     const [builtInMetadata, setBuiltInMetadata] = useState<any | null>(null);
+    const [isTextParseOpen, setIsTextParseOpen] = useState(false);
     const { setModelDownloadPath } = useAppStore();
 
     useEffect(() => {
@@ -164,11 +173,18 @@ export default function Home() {
         if (!currentPdfPath) return;
         setIsExtracting(true);
         try {
-            // 1. Rust 백엔드를 통해 PDF에서 순수 텍스트 파싱
-            const text = await invoke<string>("extract_pdf_text", {
-                filePath: currentPdfPath,
-            });
-            setExtractedText(text);
+            let text = parsedPdfText;
+            if (!text) {
+                // 1. Rust 백엔드를 통해 PDF에서 순수 텍스트 파싱
+                text = await invoke<string>("extract_pdf_text", {
+                    filePath: currentPdfPath,
+                });
+                setParsedPdfText(text);
+            }
+            
+            // Temporary Raw Text Viewer will use extractedText to show LLM output now, 
+            // but previously it showed parsed PDF text. Let's keep it empty until LLM returns, or just use it for LLM raw output.
+            // setExtractedText(text); // Remove this to only show LLM output in extractedText
 
             // 2. 스토어에서 로컬 모델 주소 로드
             const store = await load("settings.json");
@@ -257,22 +273,44 @@ ${text}
                     throw new Error("Unknown cloud provider selected.");
                 }
             } else if (provider === "builtin") {
-                // 3. Candle Built-in 로컬 추론 실행
+                // 3. Llama.cpp Built-in 로컬 추론 실행
                 if (!builtInModel) throw new Error("Please select a built-in model.");
                 if (!modelDownloadPath) throw new Error("Model download path is not configured.");
 
-                const fullPrompt = `${systemPrompt}\n\nUser Request: ${promptText}`;
-                const builtinResult = await invoke<string>("run_builtin_model", {
+                setIsStreaming(true);
+                setExtractedText("");
+                
+                // Tauri Event Listener for Token Stream
+                const unlisten = await listen<string>("token_stream", (event) => {
+                    setExtractedText((prev) => prev + event.payload);
+                });
+
+                const builtinResultString = await invoke<string>("run_builtin_model", {
                     path: modelDownloadPath,
                     filename: builtInModel,
-                    prompt: fullPrompt,
+                    prompt: promptText, // System prompt is now handled by backend
+                    systemPrompt,
                     temperature,
                     topP,
+                    repeatPenalty,
+                    nGpuLayers,
                     maxTokens,
                 });
 
-                // Built-in은 invoke로 직접 텍스트를 반환하므로 별도 파싱
-                const cleanedBuiltin = builtinResult
+                unlisten(); // Stop listening
+                setIsStreaming(false);
+
+                // Built-in returns a JSON string containing text, ttft_ms, tps
+                let resultObj;
+                try {
+                    resultObj = JSON.parse(builtinResultString);
+                    setTimeToFirstToken(resultObj.ttft_ms);
+                    setTokensPerSecond(resultObj.tps);
+                } catch (e) {
+                    throw new Error(`Failed to parse stats from built-in model:\n${builtinResultString}`);
+                }
+
+                const cleanedBuiltin = resultObj.text
                     .replace(/```json/gi, "")
                     .replace(/```/g, "")
                     .trim();
@@ -280,7 +318,7 @@ ${text}
                 try {
                     parsedData = JSON.parse(cleanedBuiltin);
                 } catch (e) {
-                    throw new Error(`Failed to parse JSON from built-in model:\n${builtinResult}`);
+                    throw new Error(`Failed to parse JSON array from built-in model:\n${resultObj.text}`);
                 }
                 setExtractedData(
                     Array.isArray(parsedData) ? parsedData : [parsedData],
@@ -409,9 +447,10 @@ ${text}
 
     return (
         <div className="p-4 sm:p-6 flex flex-col lg:flex-row gap-6 items-start">
-            {/* Left Panel: Viewer */}
-            <Card className="flex-1 flex flex-col w-full min-h-[60vh] lg:min-h-[calc(100vh-3rem)] lg:sticky lg:top-6 overflow-hidden">
-                <CardHeader className="py-4 border-b">
+            {/* Left Panel: Viewer & Parsed Text */}
+            <div className="flex-1 flex flex-col w-full gap-6 lg:min-h-[calc(100vh-3rem)] lg:sticky lg:top-6">
+                <Card className="flex flex-col w-full flex-1 overflow-hidden min-h-[60vh]">
+                    <CardHeader className="py-4 border-b">
                     <CardTitle className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-lg w-full">
                         <span>PDF Viewer</span>
                         <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -512,9 +551,46 @@ ${text}
                 </CardContent>
             </Card>
 
+            {/* Parsed Text Collapsible Area */}
+            {currentPdfPath && (
+                <Card className="shrink-0">
+                    <CardHeader className="py-3 flex flex-row items-center justify-between cursor-pointer select-none" onClick={() => setIsTextParseOpen(!isTextParseOpen)}>
+                        <CardTitle className="text-md flex items-center gap-2">
+                            <FileText className="w-4 h-4" />
+                            Parsed Text Data (Cache)
+                        </CardTitle>
+                        <div className="flex items-center gap-2">
+                            {parsedPdfText && (
+                                <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setParsedPdfText(null);
+                                    }}
+                                    title="Clear Parsed Text"
+                                >
+                                    <Trash2 className="h-4 w-4" />
+                                </Button>
+                            )}
+                            {isTextParseOpen ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                        </div>
+                    </CardHeader>
+                    {isTextParseOpen && (
+                        <CardContent className="p-0 border-t relative">
+                            <div className="p-4 max-h-[300px] overflow-y-auto text-xs font-mono bg-muted/10 whitespace-pre-wrap">
+                                {parsedPdfText ? parsedPdfText : <span className="text-muted-foreground italic">No parsed data yet. Click "Extract with LLM" to parse.</span>}
+                            </div>
+                        </CardContent>
+                    )}
+                </Card>
+            )}
+            </div>
+
             {/* Right Panel: Controls & Extraction */}
             <div className="w-full lg:w-[400px] shrink-0 flex flex-col gap-6 lg:h-[calc(100vh-3rem)] lg:sticky lg:top-6 overflow-y-auto pb-4 pr-1">
-                <Card className="flex-shrink-0">
+                <Card className="shrink-0">
                     <CardHeader className="py-4">
                         <CardTitle className="text-lg flex items-center gap-2">
                             <Settings2 className="w-5 h-5" />
@@ -625,7 +701,17 @@ ${text}
                                 )}
 
                                 <div className="space-y-2 pt-2 border-t">
-                                    <Label>Prompt / Keywords</Label>
+                                    <Label>System Prompt</Label>
+                                    <Textarea
+                                        value={systemPrompt}
+                                        onChange={(e) => setSystemPrompt(e.target.value)}
+                                        placeholder="e.g. You are a helpful assistant..."
+                                        className="min-h-[60px] resize-y text-xs"
+                                    />
+                                </div>
+
+                                <div className="space-y-2 pt-2">
+                                    <Label>User Prompt / Keywords</Label>
                                     <Textarea
                                         value={promptText}
                                         onChange={(e) => setPromptText(e.target.value)}
@@ -683,6 +769,22 @@ ${text}
                                         />
                                     </div>
 
+                                    <div className="space-y-2">
+                                        <div className="flex justify-between items-center">
+                                            <Label>Repeat Penalty</Label>
+                                            <Input 
+                                                type="number" min="1.0" max="2.0" step="0.05" 
+                                                value={repeatPenalty} onChange={e => setRepeatPenalty(parseFloat(e.target.value))}
+                                                className="w-16 h-7 text-xs px-2"
+                                            />
+                                        </div>
+                                        <input 
+                                            type="range" min="1.0" max="2.0" step="0.05" 
+                                            value={repeatPenalty} onChange={e => setRepeatPenalty(parseFloat(e.target.value))}
+                                            className="w-full"
+                                        />
+                                    </div>
+
                                     {llmMode !== "cloud" && (
                                         <div className="space-y-2">
                                             <div className="flex justify-between items-center">
@@ -698,6 +800,25 @@ ${text}
                                                 value={maxTokens} onChange={e => setMaxTokens(parseInt(e.target.value))}
                                                 className="w-full"
                                             />
+                                        </div>
+                                    )}
+
+                                    {llmMode === "local" && provider === "builtin" && (
+                                        <div className="space-y-2">
+                                            <div className="flex justify-between items-center">
+                                                <Label>GPU Offload (Layers)</Label>
+                                                <Input 
+                                                    type="number" min="0" max="99" step="1" 
+                                                    value={nGpuLayers} onChange={e => setNGpuLayers(parseInt(e.target.value))}
+                                                    className="w-16 h-7 text-xs px-2"
+                                                />
+                                            </div>
+                                            <input 
+                                                type="range" min="0" max="99" step="1" 
+                                                value={nGpuLayers} onChange={e => setNGpuLayers(parseInt(e.target.value))}
+                                                className="w-full"
+                                            />
+                                            <p className="text-[10px] text-muted-foreground">VRAM 사용을 최적화하기 위해 조절하세요 (0 = CPU only).</p>
                                         </div>
                                     )}
                                 </div>
@@ -737,21 +858,41 @@ ${text}
                 </Card>
 
                 {/* Temporary Raw Text Viewer for Debugging Phase 3 */}
-                {extractedText && (
-                    <Card className="flex-shrink-0 flex flex-col mb-4">
+                {(extractedText || isStreaming) && (
+                    <Card className="shrink-0 flex flex-col mb-4">
                         <CardHeader className="py-4">
-                            <CardTitle className="text-lg">
-                                Raw Extracted Text
+                            <CardTitle className="text-lg flex justify-between items-center">
+                                <span>Generation Output</span>
+                                {isStreaming && (
+                                    <span className="flex items-center text-xs text-blue-500 font-normal">
+                                        <span className="relative flex h-2 w-2 mr-2">
+                                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                                          <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                                        </span>
+                                        Streaming...
+                                    </span>
+                                )}
                             </CardTitle>
                             <CardDescription>
-                                Rust backend parsing result
+                                Live text generation from local model
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="p-0 relative min-h-[200px]">
                             <div className="absolute inset-0 p-4 overflow-y-auto text-xs font-mono bg-muted/30 whitespace-pre-wrap">
                                 {extractedText}
+                                {isStreaming && <span className="animate-pulse font-bold">_</span>}
                             </div>
                         </CardContent>
+                        {(timeToFirstToken !== null || tokensPerSecond !== null) && (
+                            <div className="px-4 py-2 border-t bg-muted/10 flex justify-between text-[10px] text-muted-foreground">
+                                <div>
+                                    <span className="font-semibold">TTFT:</span> {timeToFirstToken ? `${timeToFirstToken}ms` : '-'}
+                                </div>
+                                <div>
+                                    <span className="font-semibold">Speed:</span> {tokensPerSecond ? `${tokensPerSecond.toFixed(2)} t/s` : '-'}
+                                </div>
+                            </div>
+                        )}
                     </Card>
                 )}
             </div>

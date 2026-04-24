@@ -31,6 +31,20 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// Returns a list of GPU runtimes supported by this binary build.
+/// "cpu" is always included. "vulkan" / "cuda" are only included when
+/// the binary was compiled with the corresponding feature flag.
+#[tauri::command]
+fn get_supported_runtimes() -> Vec<String> {
+    #[allow(unused_mut)]
+    let mut runtimes = vec!["cpu".to_string()];
+    #[cfg(feature = "vulkan")]
+    runtimes.push("vulkan".to_string());
+    #[cfg(feature = "cuda")]
+    runtimes.push("cuda".to_string());
+    runtimes
+}
+
 #[tauri::command]
 fn get_system_memory() -> serde_json::Value {
     let mut sys = System::new_all();
@@ -220,22 +234,34 @@ async fn run_builtin_model(
     path: String,
     filename: String,
     prompt: String,
+    system_prompt: String,
     temperature: f64,
     top_p: f64,
+    repeat_penalty: f64,
+    n_gpu_layers: u32,
     max_tokens: usize,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
     let mut model_path = PathBuf::from(&path);
     model_path.push(&filename);
 
     tracing::info!("Initializing llama_cpp backend for {}", filename);
     let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
-    let model_params = LlamaModelParams::default();
+    let model_params = LlamaModelParams::default()
+        .with_n_gpu_layers(n_gpu_layers);
     
     let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
         .map_err(|e| format!("Failed to load model. It might be incompatible or corrupted: {}", e))?;
 
+    // Combine system prompt and user prompt
+    let full_prompt = if system_prompt.trim().is_empty() {
+        prompt.clone()
+    } else {
+        format!("System: {}\n\nUser: {}", system_prompt, prompt)
+    };
+
     // Tokenize prompt first to know required context size
-    let sanitized_prompt = prompt.replace('\0', "");
+    let sanitized_prompt = full_prompt.replace('\0', "");
     let tokens = model.str_to_token(&sanitized_prompt, AddBos::Always)
         .map_err(|e| format!("Failed to tokenize prompt: {}", e))?;
         
@@ -252,6 +278,7 @@ async fn run_builtin_model(
         .map_err(|e| format!("Failed to create context: {}", e))?;
 
     let mut sampler = LlamaSampler::chain_simple([
+        LlamaSampler::penalties(64, repeat_penalty as f32, 0.0, 0.0),
         if temperature > 0.0 { LlamaSampler::temp(temperature as f32) } else { LlamaSampler::greedy() },
         LlamaSampler::top_p(if top_p > 0.0 && top_p < 1.0 { top_p as f32 } else { 1.0 }, 1),
         LlamaSampler::greedy(),
@@ -263,6 +290,9 @@ async fn run_builtin_model(
     // Evaluate initial prompt in chunks to respect n_batch limit
     let mut n_cur = 0;
     
+    let start_time = std::time::Instant::now();
+    let mut time_to_first_token: Option<u128> = None;
+    
     for chunk in tokens.chunks(n_batch as usize) {
         batch.clear();
         for (i, &token) in chunk.iter().enumerate() {
@@ -273,9 +303,15 @@ async fn run_builtin_model(
         n_cur += chunk.len() as i32;
     }
 
+    let mut generated_tokens_count = 0;
+
     for _ in 0..max_tokens {
         let new_token = sampler.sample(&ctx, batch.n_tokens() - 1);
         sampler.accept(new_token);
+        
+        if time_to_first_token.is_none() {
+            time_to_first_token = Some(start_time.elapsed().as_millis());
+        }
         
         if model.is_eog_token(new_token) {
             break;
@@ -285,6 +321,10 @@ async fn run_builtin_model(
         if let Ok(bytes) = model.token_to_piece_bytes(new_token, 32, true, None) {
             if let Ok(piece) = String::from_utf8(bytes) {
                 generated_text.push_str(&piece);
+                generated_tokens_count += 1;
+                
+                // Emit streaming event
+                let _ = app.emit("token_stream", piece.clone());
             }
         }
         
@@ -298,8 +338,19 @@ async fn run_builtin_model(
         }
     }
 
-    tracing::info!("Generation complete");
-    Ok(generated_text)
+    let elapsed = start_time.elapsed().as_secs_f64();
+    let tps = if elapsed > 0.0 { generated_tokens_count as f64 / elapsed } else { 0.0 };
+    let ttft = time_to_first_token.unwrap_or(0);
+
+    tracing::info!("Generation complete. TTFT: {}ms, TPS: {:.2}", ttft, tps);
+    
+    let result = serde_json::json!({
+        "text": generated_text,
+        "ttft_ms": ttft,
+        "tps": tps
+    });
+
+    Ok(result.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -323,7 +374,8 @@ pub fn run() {
             delete_model,
             get_all_files_in_dir,
             get_gguf_metadata,
-            run_builtin_model
+            run_builtin_model,
+            get_supported_runtimes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

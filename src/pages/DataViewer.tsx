@@ -11,8 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import * as XLSX from "xlsx";
-import { Download, TableProperties, BarChart3, Trash2 } from "lucide-react";
+import { TableProperties, BarChart3, Trash2, FileSpreadsheet, FileText } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
 
 export default function DataViewer() {
   const { extractedData, setExtractedData } = useAppStore();
@@ -48,11 +50,57 @@ export default function DataViewer() {
     getPaginationRowModel: getPaginationRowModel(),
   });
 
-  const exportToExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(displayData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "ExtractedData");
-    XLSX.writeFile(wb, "Extracted_Data.xlsx");
+  const exportToExcel = async () => {
+    try {
+      const ws = XLSX.utils.json_to_sheet(displayData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "ExtractedData");
+      
+      const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      
+      const filePath = await save({
+        filters: [{ name: 'Excel', extensions: ['xlsx'] }],
+        defaultPath: 'Extracted_Data.xlsx'
+      });
+      
+      if (filePath) {
+        await writeFile(filePath, new Uint8Array(excelBuffer));
+      }
+    } catch (err) {
+      console.error("Failed to export Excel:", err);
+    }
+  };
+
+  const exportToCSV = async () => {
+    try {
+      if (displayData.length === 0) return;
+      
+      const keys = Object.keys(displayData[0]);
+      const header = keys.join(",");
+      const rows = displayData.map(obj => 
+        keys.map(key => {
+          let val = obj[key] === null || obj[key] === undefined ? "" : obj[key];
+          let strVal = String(val);
+          strVal = strVal.replace(/"/g, '""');
+          if (strVal.includes(",") || strVal.includes("\n") || strVal.includes('"')) {
+            strVal = `"${strVal}"`;
+          }
+          return strVal;
+        }).join(",")
+      );
+      const csvContent = [header, ...rows].join("\n");
+      
+      const filePath = await save({
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+        defaultPath: 'Extracted_Data.csv'
+      });
+      
+      if (filePath) {
+        await writeFile(filePath, new TextEncoder().encode(csvContent));
+      }
+    } catch (err) {
+      console.error("Failed to export CSV:", err);
+    }
   };
 
   const clearData = () => {
@@ -84,9 +132,23 @@ export default function DataViewer() {
             <BarChart3 className="w-4 h-4 mr-2" />
             Chart
           </Button>
-          <Button variant="outline" onClick={exportToExcel} className="bg-green-500/10 text-green-600 border-green-500/20 hover:bg-green-500/20">
-            <Download className="w-4 h-4 mr-2" />
-            Export Excel
+          <Button 
+            variant="outline" 
+            onClick={exportToExcel} 
+            disabled={!extractedData || extractedData.length === 0}
+            className="bg-green-500/10 text-green-600 border-green-500/20 hover:bg-green-500/20 disabled:opacity-50"
+          >
+            <FileSpreadsheet className="w-4 h-4 mr-2" />
+            Excel
+          </Button>
+          <Button 
+            variant="outline" 
+            onClick={exportToCSV} 
+            disabled={!extractedData || extractedData.length === 0}
+            className="bg-blue-500/10 text-blue-600 border-blue-500/20 hover:bg-blue-500/20 disabled:opacity-50"
+          >
+            <FileText className="w-4 h-4 mr-2" />
+            CSV
           </Button>
           <Button variant="destructive" onClick={clearData}>
             <Trash2 className="w-4 h-4" />

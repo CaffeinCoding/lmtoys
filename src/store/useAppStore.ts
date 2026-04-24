@@ -6,6 +6,9 @@ interface AppState {
   extractedData: any[] | null;
   setExtractedData: (data: any[] | null) => void;
   
+  parsedPdfText: string | null;
+  setParsedPdfText: (text: string | null) => void;
+  
   // Extraction Configuration State
   llmMode: "cloud" | "local";
   setLlmMode: (mode: "cloud" | "local") => void;
@@ -33,13 +36,39 @@ interface AppState {
   setTopK: (k: number) => void;
   topP: number;
   setTopP: (p: number) => void;
+  
+  // Advanced Settings
+  systemPrompt: string;
+  setSystemPrompt: (prompt: string) => void;
+  repeatPenalty: number;
+  setRepeatPenalty: (penalty: number) => void;
+  nGpuLayers: number;
+  setNGpuLayers: (layers: number) => void;
+  selectedRuntime: "cpu" | "vulkan" | "cuda" | "cuda12";
+  setSelectedRuntime: (runtime: "cpu" | "vulkan" | "cuda" | "cuda12") => void;
+
+  // Inference Telemetry & Streaming State
+  isStreaming: boolean;
+  setIsStreaming: (streaming: boolean) => void;
+  tokensPerSecond: number | null;
+  setTokensPerSecond: (tps: number | null) => void;
+  timeToFirstToken: number | null;
+  setTimeToFirstToken: (ttft: number | null) => void;
+
+  // System Resource Monitoring
+  sysMemory: { total: number; used: number } | null;
+  setSysMemory: (mem: { total: number; used: number } | null) => void;
+  sysVram: { total: number; used: number } | null;
+  setSysVram: (vram: { total: number; used: number } | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   currentPdfPath: null,
-  setCurrentPdfPath: (path) => set({ currentPdfPath: path }),
+  setCurrentPdfPath: (path) => set({ currentPdfPath: path, parsedPdfText: null }),
   extractedData: null,
   setExtractedData: (data) => set({ extractedData: data }),
+  parsedPdfText: null,
+  setParsedPdfText: (text) => set({ parsedPdfText: text }),
   
   llmMode: "local",
   setLlmMode: (mode) => set({ llmMode: mode }),
@@ -66,4 +95,25 @@ export const useAppStore = create<AppState>((set) => ({
   setTopK: (k) => set({ topK: k }),
   topP: 0.9,
   setTopP: (p) => set({ topP: p }),
+  
+  systemPrompt: "You are a helpful and precise assistant. Extract information accurately.",
+  setSystemPrompt: (prompt) => set({ systemPrompt: prompt }),
+  repeatPenalty: 1.1,
+  setRepeatPenalty: (penalty) => set({ repeatPenalty: penalty }),
+  nGpuLayers: 0, // Default to 0 (CPU)
+  setNGpuLayers: (layers) => set({ nGpuLayers: layers }),
+  selectedRuntime: "cpu",
+  setSelectedRuntime: (runtime) => set({ selectedRuntime: runtime }),
+
+  isStreaming: false,
+  setIsStreaming: (streaming) => set({ isStreaming: streaming }),
+  tokensPerSecond: null,
+  setTokensPerSecond: (tps) => set({ tokensPerSecond: tps }),
+  timeToFirstToken: null,
+  setTimeToFirstToken: (ttft) => set({ timeToFirstToken: ttft }),
+
+  sysMemory: null,
+  setSysMemory: (mem) => set({ sysMemory: mem }),
+  sysVram: null,
+  setSysVram: (vram) => set({ sysVram: vram }),
 }));

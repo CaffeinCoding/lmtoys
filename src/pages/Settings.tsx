@@ -24,11 +24,12 @@ export default function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
 
-  const { modelDownloadPath, setModelDownloadPath, hfToken, setHfToken } = useAppStore();
+  const { modelDownloadPath, setModelDownloadPath, hfToken, setHfToken, selectedRuntime, setSelectedRuntime } = useAppStore();
   const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<{ [key: string]: number }>({});
   const [isDownloading, setIsDownloading] = useState<{ [key: string]: boolean }>({});
   const [localHfToken, setLocalHfToken] = useState("");
+  const [supportedRuntimes, setSupportedRuntimes] = useState<string[]>(["cpu"]);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
@@ -36,6 +37,10 @@ export default function Settings() {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [modelFiles, setModelFiles] = useState<any[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+
+  useEffect(() => {
+    invoke<string[]>("get_supported_runtimes").then(setSupportedRuntimes).catch(console.error);
+  }, []);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -284,6 +289,31 @@ export default function Settings() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              <div className="space-y-2">
+                <Label>GPU Runtime</Label>
+                <div className="flex gap-2 items-center">
+                  <select 
+                    value={selectedRuntime}
+                    onChange={(e) => setSelectedRuntime(e.target.value as any)}
+                    className="flex h-10 w-full md:w-64 items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+                  >
+                    {supportedRuntimes.map((rt) => (
+                      <option key={rt} value={rt}>
+                        {{ cpu: "CPU Only (Default)", vulkan: "Vulkan (AMD/Intel/NVIDIA)", cuda: "CUDA (NVIDIA)", cuda12: "CUDA 12 (NVIDIA)" }[rt] ?? rt}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {supportedRuntimes.length === 1 && (
+                  <p className="text-xs text-amber-500 max-w-[600px] mt-1">
+                    ⚠️ 현재 바이너리에는 <strong>CPU Only</strong> 모드만 컴파일되어 있습니다. GPU 가속을 활성화하려면
+                    <code className="mx-1 px-1 bg-muted rounded text-[10px]">cargo build --features vulkan</code> 또는
+                    <code className="mx-1 px-1 bg-muted rounded text-[10px]">cargo build --features cuda</code>로
+                    재빌드하세요.
+                  </p>
+                )}
+              </div>
+
               <div className="space-y-2">
                 <Label>Download Directory</Label>
                 <div className="flex gap-2">
