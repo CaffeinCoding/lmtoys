@@ -36,63 +36,6 @@ export default function Settings() {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [modelFiles, setModelFiles] = useState<any[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
-  const [tokenizerStatus, setTokenizerStatus] = useState<{ [key: string]: "found" | "missing" | "downloading" }>({});
-
-  // 토크나이저 스마트 다운로드: GGUF 저장소 → base_model 원본 저장소 순으로 탐색
-  const downloadTokenizerSmart = async (repoId: string, ggufFilename: string): Promise<boolean> => {
-    if (!modelDownloadPath) return false;
-    const tokenizerFilename = `${ggufFilename}.tokenizer.json`;
-
-    const headers: Record<string, string> = hfToken ? { "Authorization": `Bearer ${hfToken}` } : {};
-
-    // 1차: 같은 GGUF 저장소에서 시도
-    try {
-      const checkUrl = `https://huggingface.co/${repoId}/resolve/main/tokenizer.json`;
-      const checkRes = await fetch(checkUrl, { method: "HEAD", headers });
-      if (checkRes.ok) {
-        await invoke("download_model", {
-          url: `${checkUrl}?download=true`,
-          path: modelDownloadPath,
-          filename: tokenizerFilename,
-          token: hfToken
-        });
-        return true;
-      }
-    } catch (e) {
-      console.warn("Tokenizer not in GGUF repo", e);
-    }
-
-    // 2차: HuggingFace API에서 base_model 조회 후 원본 저장소에서 다운로드
-    try {
-      const apiRes = await fetch(`https://huggingface.co/api/models/${repoId}`, { headers });
-      if (apiRes.ok) {
-        const apiData = await apiRes.json();
-        // base_model can be a string or array
-        let baseModel = apiData?.cardData?.base_model || apiData?.config?.base_model;
-        if (Array.isArray(baseModel)) baseModel = baseModel[0];
-
-        if (!baseModel) {
-          // 3차 fallback: GGUF 저장소명에서 -GGUF 제거하여 추측
-          baseModel = repoId.replace(/-GGUF$/i, "").replace(/-gguf$/i, "");
-        }
-
-        if (baseModel && baseModel !== repoId) {
-          const baseUrl = `https://huggingface.co/${baseModel}/resolve/main/tokenizer.json?download=true`;
-          await invoke("download_model", {
-            url: baseUrl,
-            path: modelDownloadPath,
-            filename: tokenizerFilename,
-            token: hfToken
-          });
-          return true;
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to fetch tokenizer from base model", e);
-    }
-
-    return false;
-  };
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -173,15 +116,6 @@ export default function Settings() {
     try {
       const models = await invoke<string[]>("get_downloaded_models", { path });
       setDownloadedModels(models);
-      
-      // 각 모델의 토크나이저 존재 여부 확인
-      const status: { [key: string]: "found" | "missing" } = {};
-      const allFiles = await invoke<string[]>("get_all_files_in_dir", { path });
-      for (const model of models) {
-        const tokenizerName = `${model}.tokenizer.json`;
-        status[model] = allFiles.includes(tokenizerName) ? "found" : "missing";
-      }
-      setTokenizerStatus(status);
     } catch (err) {
       console.error("Failed to fetch downloaded models", err);
     }
@@ -436,12 +370,6 @@ export default function Settings() {
                                           token: hfToken
                                         });
 
-                                        // 스마트 토크나이저 다운로드: GGUF 저장소 → base_model 원본 저장소 순으로 탐색
-                                        const tokenizerOk = await downloadTokenizerSmart(selectedModelId!, file.rfilename);
-                                        if (!tokenizerOk) {
-                                          console.warn("Tokenizer could not be downloaded from any source.");
-                                        }
-
                                       } catch (err) {
                                         console.error(err);
                                         setIsDownloading(prev => ({ ...prev, [file.rfilename]: false }));
@@ -470,15 +398,6 @@ export default function Settings() {
                             <div className="flex items-center justify-between">
                               <span className="text-sm truncate mr-4" title={name}>{name}</span>
                               <div className="flex items-center gap-2 shrink-0">
-                                {tokenizerStatus[name] === "found" && (
-                                  <span className="text-xs text-green-500 bg-green-500/10 border border-green-500/30 px-2 py-0.5 rounded">✓ Tokenizer</span>
-                                )}
-                                {tokenizerStatus[name] === "missing" && (
-                                  <span className="text-xs text-orange-500 bg-orange-500/10 border border-orange-500/30 px-2 py-0.5 rounded">⚠ No Tokenizer</span>
-                                )}
-                                {tokenizerStatus[name] === "downloading" && (
-                                  <span className="text-xs text-blue-500 bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 rounded">Downloading...</span>
-                                )}
                                 <Button 
                                   size="sm" 
                                   variant="destructive" 
@@ -495,43 +414,6 @@ export default function Settings() {
                                 </Button>
                               </div>
                             </div>
-                            {tokenizerStatus[name] === "missing" && (
-                              <div className="flex items-center gap-2">
-                                <Input
-                                  placeholder="base model repo (e.g. google/gemma-4-E2B-it)"
-                                  className="h-8 text-xs"
-                                  id={`tokenizer-repo-${name}`}
-                                />
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  className="shrink-0 h-8 text-xs"
-                                  onClick={async () => {
-                                    const inputEl = document.getElementById(`tokenizer-repo-${name}`) as HTMLInputElement;
-                                    const repoId = inputEl?.value?.trim();
-                                    if (!repoId) {
-                                      alert("Please enter the base model repo ID (e.g. google/gemma-4-E2B-it)");
-                                      return;
-                                    }
-                                    setTokenizerStatus(prev => ({ ...prev, [name]: "downloading" }));
-                                    try {
-                                      const ok = await downloadTokenizerSmart(repoId, name);
-                                      if (ok) {
-                                        setTokenizerStatus(prev => ({ ...prev, [name]: "found" }));
-                                      } else {
-                                        setTokenizerStatus(prev => ({ ...prev, [name]: "missing" }));
-                                        alert("Failed to download tokenizer. Please check the repo ID.");
-                                      }
-                                    } catch (e) {
-                                      console.error(e);
-                                      setTokenizerStatus(prev => ({ ...prev, [name]: "missing" }));
-                                    }
-                                  }}
-                                >
-                                  <Download className="w-3 h-3 mr-1" /> Get Tokenizer
-                                </Button>
-                              </div>
-                            )}
                           </div>
                         ))}
                       </div>

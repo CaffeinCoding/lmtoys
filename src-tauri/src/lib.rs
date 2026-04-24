@@ -4,9 +4,12 @@ use tauri::Emitter;
 use futures_util::StreamExt;
 use std::fs::File;
 use std::io::Write;
-use candle_core::{Device, Tensor};
-use candle_transformers::generation::LogitsProcessor;
-use tokenizers::Tokenizer;
+use llama_cpp_2::llama_backend::LlamaBackend;
+use llama_cpp_2::model::params::LlamaModelParams;
+use llama_cpp_2::model::{LlamaModel, AddBos};
+use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::llama_batch::LlamaBatch;
+use llama_cpp_2::sampling::LlamaSampler;
 
 #[derive(Clone, serde::Serialize)]
 struct DownloadProgress {
@@ -162,12 +165,6 @@ fn delete_model(path: String, filename: String) -> Result<(), String> {
     if dest_path.exists() {
         std::fs::remove_file(&dest_path).map_err(|e| e.to_string())?;
     }
-    // 연관된 토크나이저 파일도 함께 삭제
-    let mut tokenizer_path = PathBuf::from(&path);
-    tokenizer_path.push(format!("{}.tokenizer.json", filename));
-    if tokenizer_path.exists() {
-        std::fs::remove_file(tokenizer_path).map_err(|e| e.to_string())?;
-    }
     Ok(())
 }
 
@@ -194,34 +191,22 @@ fn get_gguf_metadata(path: String, filename: String) -> Result<GgufMetadata, Str
     let mut dest_path = PathBuf::from(&path);
     dest_path.push(filename);
     
-    let mut file = File::open(&dest_path).map_err(|e| e.to_string())?;
+    let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
+    let mut params = LlamaModelParams::default();
+    params = params.with_vocab_only(true);
+
+    let model = LlamaModel::load_from_file(&backend, &dest_path, &params).map_err(|e| format!("Failed to load metadata: {}", e))?;
     
-    // Candle's GGUF parser
-    let content = candle_core::quantized::gguf_file::Content::read(&mut file).map_err(|e| e.to_string())?;
+    let architecture = model.meta_val_str("general.architecture").unwrap_or_else(|_| "unknown".to_string());
     
-    let mut architecture = String::from("unknown");
-    let mut context_length = 4096;
-    let mut has_vision = false;
-    
-    if let Some(arch) = content.metadata.get("general.architecture") {
-        if let candle_core::quantized::gguf_file::Value::String(s) = arch {
-            architecture = s.clone();
-            
-            let ctx_key = format!("{}.context_length", architecture);
-            if let Some(ctx) = content.metadata.get(&ctx_key) {
-                match ctx {
-                    candle_core::quantized::gguf_file::Value::U32(v) => context_length = *v as u64,
-                    candle_core::quantized::gguf_file::Value::U64(v) => context_length = *v,
-                    _ => {}
-                }
-            }
-        }
-    }
-    
+    let ctx_key = format!("{}.context_length", architecture);
+    let context_length = model.meta_val_str(&ctx_key)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(4096);
+        
     let arch_lower = architecture.to_lowercase();
-    if arch_lower.contains("llava") || arch_lower.contains("vl") || arch_lower.contains("qwen-vl") {
-        has_vision = true;
-    }
+    let has_vision = arch_lower.contains("llava") || arch_lower.contains("vl") || arch_lower.contains("qwen-vl") || arch_lower.contains("vision");
     
     Ok(GgufMetadata {
         architecture,
@@ -241,120 +226,88 @@ async fn run_builtin_model(
 ) -> Result<String, String> {
     let mut model_path = PathBuf::from(&path);
     model_path.push(&filename);
+
+    tracing::info!("Initializing llama_cpp backend for {}", filename);
+    let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
+    let model_params = LlamaModelParams::default();
     
-    let mut tokenizer_path = PathBuf::from(&path);
-    tokenizer_path.push(format!("{}.tokenizer.json", filename));
+    let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
+        .map_err(|e| format!("Failed to load model. It might be incompatible or corrupted: {}", e))?;
 
-    if !tokenizer_path.exists() {
-        return Err("Tokenizer not found. Please visit Settings, delete the model, and re-download it to fetch the tokenizer.".into());
-    }
+    // Tokenize prompt first to know required context size
+    let sanitized_prompt = prompt.replace('\0', "");
+    let tokens = model.str_to_token(&sanitized_prompt, AddBos::Always)
+        .map_err(|e| format!("Failed to tokenize prompt: {}", e))?;
+        
+    tracing::info!("Prompt tokenized to {} tokens", tokens.len());
 
-    let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| e.to_string())?;
+    let req_ctx_size = tokens.len() as u32 + max_tokens as u32 + 1024;
+    let n_batch = 2048;
 
-    let mut file = std::fs::File::open(&model_path).map_err(|e| e.to_string())?;
-    let content = candle_core::quantized::gguf_file::Content::read(&mut file).map_err(|e| {
-        if e.to_string().contains("unknown dtype") {
-            format!("Unsupported GGUF tensor type found. This model might be using imatrix (IQ) or UD quantization which is not yet supported by Candle. Please try a standard Q4_K_M or Q8_0 model from a different provider (e.g., bartowski). Original error: {}", e)
-        } else {
-            e.to_string()
-        }
-    })?;
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(Some(std::num::NonZeroU32::new(req_ctx_size).unwrap_or(std::num::NonZeroU32::new(2048).unwrap())))
+        .with_n_batch(n_batch);
+    
+    let mut ctx = model.new_context(&backend, ctx_params)
+        .map_err(|e| format!("Failed to create context: {}", e))?;
 
-    // Detect architecture from GGUF metadata
-    let architecture = content.metadata.get("general.architecture")
-        .and_then(|v| {
-            if let candle_core::quantized::gguf_file::Value::String(s) = v { Some(s.clone()) } else { None }
-        })
-        .unwrap_or_else(|| "llama".to_string())
-        .to_lowercase();
-
-    let seed = 299792458;
-    let temp = if temperature <= 0.0 { None } else { Some(temperature) };
-    let top_p_opt = if top_p <= 0.0 || top_p >= 1.0 { None } else { Some(top_p) };
-    let mut logits_processor = LogitsProcessor::new(seed, temp, top_p_opt);
-
-    let tokens = tokenizer.encode(prompt, true).map_err(|e| e.to_string())?;
-    let mut tokens = tokens.get_ids().to_vec();
-
-    // Multi-architecture enum dispatch
-    enum ModelArch {
-        Llama(candle_transformers::models::quantized_llama::ModelWeights),
-        Phi(candle_transformers::models::quantized_phi::ModelWeights),
-        Phi3(candle_transformers::models::quantized_phi3::ModelWeights),
-        Qwen2(candle_transformers::models::quantized_qwen2::ModelWeights),
-    }
-
-    let supported_archs = ["llama", "gemma", "gemma2", "gemma3", "gemma4", "phi", "phi2", "phi3", "qwen", "qwen2", "qwen2moe", "starcoder2", "internlm2"];
-
-    let mut model = match architecture.as_str() {
-        // Llama family: llama, gemma, gemma2, gemma3, gemma4, internlm2, starcoder2 all use the quantized_llama loader
-        "llama" | "gemma" | "gemma2" | "gemma3" | "gemma4" | "internlm2" | "starcoder2" => {
-            let m = candle_transformers::models::quantized_llama::ModelWeights::from_gguf(content, &mut file, &Device::Cpu)
-                .map_err(|e| format!("Failed to load model as Llama-compatible (arch: {}): {}", architecture, e))?;
-            ModelArch::Llama(m)
-        },
-        // Phi-2 family
-        "phi" | "phi2" => {
-            let m = candle_transformers::models::quantized_phi::ModelWeights::from_gguf(content, &mut file, &Device::Cpu)
-                .map_err(|e| format!("Failed to load model as Phi (arch: {}): {}", architecture, e))?;
-            ModelArch::Phi(m)
-        },
-        // Phi-3 family
-        "phi3" => {
-            let m = candle_transformers::models::quantized_phi3::ModelWeights::from_gguf(false, content, &mut file, &Device::Cpu)
-                .map_err(|e| format!("Failed to load model as Phi3 (arch: {}): {}", architecture, e))?;
-            ModelArch::Phi3(m)
-        },
-        // Qwen2 family
-        "qwen" | "qwen2" | "qwen2moe" => {
-            let m = candle_transformers::models::quantized_qwen2::ModelWeights::from_gguf(content, &mut file, &Device::Cpu)
-                .map_err(|e| format!("Failed to load model as Qwen2 (arch: {}): {}", architecture, e))?;
-            ModelArch::Qwen2(m)
-        },
-        _ => {
-            return Err(format!(
-                "Unsupported model architecture: '{}'. Supported architectures: {:?}. \
-                You can still use this model via Ollama or LM Studio.",
-                architecture, supported_archs
-            ));
-        }
-    };
+    let mut sampler = LlamaSampler::chain_simple([
+        if temperature > 0.0 { LlamaSampler::temp(temperature as f32) } else { LlamaSampler::greedy() },
+        LlamaSampler::top_p(if top_p > 0.0 && top_p < 1.0 { top_p as f32 } else { 1.0 }, 1),
+        LlamaSampler::greedy(),
+    ]);
 
     let mut generated_text = String::new();
+    let mut batch = LlamaBatch::new(n_batch as usize, 1);
+    
+    // Evaluate initial prompt in chunks to respect n_batch limit
+    let mut n_cur = 0;
+    
+    for chunk in tokens.chunks(n_batch as usize) {
+        batch.clear();
+        for (i, &token) in chunk.iter().enumerate() {
+            let is_last = (n_cur + i as i32) == (tokens.len() as i32 - 1);
+            batch.add(token, n_cur + i as i32, &[0], is_last).map_err(|e| e.to_string())?;
+        }
+        ctx.decode(&mut batch).map_err(|e| format!("Decode failed on prompt chunk: {}", e))?;
+        n_cur += chunk.len() as i32;
+    }
 
-    // Unified inference loop — all architectures share the same forward(input, pos) -> logits signature
-    for index in 0..max_tokens {
-        let context_size = if index > 0 { 1 } else { tokens.len() };
-        let start_pos = tokens.len().saturating_sub(context_size);
+    for _ in 0..max_tokens {
+        let new_token = sampler.sample(&ctx, batch.n_tokens() - 1);
+        sampler.accept(new_token);
         
-        let input = Tensor::new(&tokens[start_pos..], &Device::Cpu)
-            .map_err(|e| e.to_string())?
-            .unsqueeze(0)
-            .map_err(|e| e.to_string())?;
+        if model.is_eog_token(new_token) {
+            break;
+        }
         
-        let logits = match &mut model {
-            ModelArch::Llama(m) => m.forward(&input, start_pos),
-            ModelArch::Phi(m) => m.forward(&input, start_pos),
-            ModelArch::Phi3(m) => m.forward(&input, start_pos),
-            ModelArch::Qwen2(m) => m.forward(&input, start_pos),
-        }.map_err(|e| e.to_string())?;
-
-        let logits = logits.squeeze(0).map_err(|e| e.to_string())?;
-        let logits = logits.squeeze(0).map_err(|e| e.to_string())?;
+        // Convert token to string representation
+        if let Ok(bytes) = model.token_to_piece_bytes(new_token, 32, true, None) {
+            if let Ok(piece) = String::from_utf8(bytes) {
+                generated_text.push_str(&piece);
+            }
+        }
         
-        let next_token = logits_processor.sample(&logits).map_err(|e| e.to_string())?;
-        tokens.push(next_token);
+        batch.clear();
+        batch.add(new_token, n_cur, &[0], true).map_err(|e| e.to_string())?;
+        n_cur += 1;
         
-        if let Some(text) = tokenizer.decode(&[next_token], false).ok() {
-            generated_text.push_str(&text);
+        if let Err(e) = ctx.decode(&mut batch) {
+            tracing::warn!("Decode failed during generation: {}", e);
+            break;
         }
     }
 
+    tracing::info!("Generation complete");
     Ok(generated_text)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("tauri_app_lib=info".parse().unwrap()))
+        .init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())

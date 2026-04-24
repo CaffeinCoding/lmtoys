@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
+import { appDataDir } from "@tauri-apps/api/path";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
@@ -69,6 +70,26 @@ export default function Home() {
     const [extractedText, setExtractedText] = useState("");
     const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
     const [builtInMetadata, setBuiltInMetadata] = useState<any | null>(null);
+    const { setModelDownloadPath } = useAppStore();
+
+    useEffect(() => {
+        async function initPath() {
+            if (modelDownloadPath) return; // Already initialized
+            try {
+                const store = await load("settings.json");
+                const downloadPath = await store.get<string>("modelDownloadPath");
+                if (downloadPath) {
+                    setModelDownloadPath(downloadPath);
+                } else {
+                    const defaultPath = await appDataDir();
+                    setModelDownloadPath(`${defaultPath}\\models`);
+                }
+            } catch (err) {
+                console.error("Failed to load model download path", err);
+            }
+        }
+        initPath();
+    }, [modelDownloadPath, setModelDownloadPath]);
 
     useEffect(() => {
         if (provider === "builtin" && modelDownloadPath && builtInModel) {

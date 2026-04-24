@@ -1,0 +1,4 @@
+[env]
+CXXFLAGS = "/utf-8"
+CFLAGS = "/utf-8"
+LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
