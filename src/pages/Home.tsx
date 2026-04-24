@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAppStore } from "@/store/useAppStore";
-import { Loader2, Upload, FileText, Settings2, Search, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import { Loader2, Upload, FileText, Settings2, Search, Trash2, ChevronDown, ChevronUp, CheckCircle2, XCircle } from "lucide-react";
 
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -62,6 +62,7 @@ export default function Home() {
         topP, setTopP,
         cloudProvider, setCloudProvider,
         systemPrompt, setSystemPrompt,
+        customJsonFormat, setCustomJsonFormat,
         repeatPenalty, setRepeatPenalty,
         nGpuLayers, setNGpuLayers,
         isStreaming, setIsStreaming,
@@ -79,7 +80,17 @@ export default function Home() {
     const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
     const [builtInMetadata, setBuiltInMetadata] = useState<any | null>(null);
     const [isTextParseOpen, setIsTextParseOpen] = useState(false);
+    const [isJsonValid, setIsJsonValid] = useState(true);
     const { setModelDownloadPath } = useAppStore();
+
+    useEffect(() => {
+        try {
+            JSON.parse(customJsonFormat);
+            setIsJsonValid(true);
+        } catch {
+            setIsJsonValid(false);
+        }
+    }, [customJsonFormat]);
 
     useEffect(() => {
         async function initPath() {
@@ -195,12 +206,26 @@ export default function Home() {
                 (await store.get<string>("lmStudioUrl")) ||
                 "http://localhost:1234/v1";
 
-            const systemPrompt = `You are a data extraction assistant. Follow the user's instructions carefully. 
-You MUST respond ONLY with a valid JSON array containing objects. Do not wrap the JSON in markdown code blocks. Just output raw JSON.
-Here is the document text:
+            if (!isJsonValid) {
+                setExtractedText("Error: Invalid Custom JSON Format. Please fix it before extracting.");
+                setIsExtracting(false);
+                return;
+            }
+
+            const finalSystemPrompt = `${systemPrompt}
+
+You MUST respond ONLY with a valid JSON matching the following format. Do not wrap the JSON in markdown code blocks. Just output raw JSON.
+
+Expected JSON Format:
+${customJsonFormat}`;
+
+            const finalUserPrompt = `Document Text:
 ---
 ${text}
----`;
+---
+
+User Instruction:
+${promptText}`;
 
             let response;
             if (llmMode === "cloud") {
@@ -219,8 +244,8 @@ ${text}
                         body: JSON.stringify({
                             model: "gpt-4o",
                             messages: [
-                                { role: "system", content: systemPrompt },
-                                { role: "user", content: promptText }
+                                { role: "system", content: finalSystemPrompt },
+                                { role: "user", content: finalUserPrompt }
                             ],
                             temperature,
                             top_p: topP
@@ -235,10 +260,10 @@ ${text}
                         },
                         body: JSON.stringify({
                             system_instruction: {
-                                parts: { text: systemPrompt }
+                                parts: { text: finalSystemPrompt }
                             },
                             contents: [{
-                                parts: [{ text: promptText }]
+                                parts: [{ text: finalUserPrompt }]
                             }],
                             generationConfig: {
                                 temperature,
@@ -260,9 +285,9 @@ ${text}
                         },
                         body: JSON.stringify({
                             model: "claude-3-5-sonnet-20241022",
-                            system: systemPrompt,
+                            system: finalSystemPrompt,
                             messages: [
-                                { role: "user", content: promptText }
+                                { role: "user", content: finalUserPrompt }
                             ],
                             temperature,
                             top_p: topP,
@@ -288,8 +313,8 @@ ${text}
                 const builtinResultString = await invoke<string>("run_builtin_model", {
                     path: modelDownloadPath,
                     filename: builtInModel,
-                    prompt: promptText, // System prompt is now handled by backend
-                    systemPrompt,
+                    prompt: finalUserPrompt,
+                    systemPrompt: finalSystemPrompt,
                     temperature,
                     topP,
                     repeatPenalty,
@@ -332,8 +357,8 @@ ${text}
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         model: modelName,
-                        prompt: promptText,
-                        system: systemPrompt,
+                        prompt: finalUserPrompt,
+                        system: finalSystemPrompt,
                         stream: false,
                         format: "json",
                         options: {
@@ -356,7 +381,7 @@ ${text}
                         messages: [
                             {
                                 role: "user",
-                                content: `${systemPrompt}\n\nUser Request: ${promptText}`,
+                                content: `${finalSystemPrompt}\n\n${finalUserPrompt}`,
                             },
                         ],
                         stream: false,
@@ -718,6 +743,28 @@ ${text}
                                         placeholder="e.g. Extract invoice total and date..."
                                         className="min-h-[120px] resize-y"
                                     />
+                                </div>
+
+                                <div className="space-y-2 pt-2 border-t">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <Label>Expected JSON Format</Label>
+                                            {isJsonValid ? (
+                                                <CheckCircle2 className="w-4 h-4 text-green-500" />
+                                            ) : (
+                                                <XCircle className="w-4 h-4 text-destructive" />
+                                            )}
+                                        </div>
+                                    </div>
+                                    <Textarea
+                                        value={customJsonFormat}
+                                        onChange={(e) => setCustomJsonFormat(e.target.value)}
+                                        placeholder={`[\n  {\n    "key": "value"\n  }\n]`}
+                                        className={`min-h-[120px] resize-y font-mono text-xs ${!isJsonValid ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+                                    />
+                                    {!isJsonValid && (
+                                        <p className="text-[10px] text-destructive">올바른 JSON 형식이 아닙니다.</p>
+                                    )}
                                 </div>
 
                                 <div className="space-y-4 pt-4 border-t">

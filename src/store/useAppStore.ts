@@ -40,6 +40,8 @@ interface AppState {
   // Advanced Settings
   systemPrompt: string;
   setSystemPrompt: (prompt: string) => void;
+  customJsonFormat: string;
+  setCustomJsonFormat: (format: string) => void;
   repeatPenalty: number;
   setRepeatPenalty: (penalty: number) => void;
   nGpuLayers: number;
@@ -98,6 +100,8 @@ export const useAppStore = create<AppState>((set) => ({
   
   systemPrompt: "You are a helpful and precise assistant. Extract information accurately.",
   setSystemPrompt: (prompt) => set({ systemPrompt: prompt }),
+  customJsonFormat: "[\n  {\n    \"key\": \"value\"\n  }\n]",
+  setCustomJsonFormat: (format) => set({ customJsonFormat: format }),
   repeatPenalty: 1.1,
   setRepeatPenalty: (penalty) => set({ repeatPenalty: penalty }),
   nGpuLayers: 0, // Default to 0 (CPU)
