@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import * as XLSX from "xlsx";
-import { TableProperties, BarChart3, Trash2, FileSpreadsheet, FileText, History, ChevronRight, ChevronLeft, Cpu, Zap, Gauge, Database } from "lucide-react";
+import { TableProperties, BarChart3, Trash2, FileSpreadsheet, FileText, History, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Cpu, Zap, Gauge, Database } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
@@ -20,9 +20,10 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 
 export default function DataViewer() {
-  const { extractedData, setExtractedData, extractionHistory, removeHistoryItem } = useAppStore();
-  const [viewMode, setViewMode] = useState<"table" | "chart">("table");
+  const { extractedData, setExtractedData, extractionHistory, removeHistoryItem, extractedText } = useAppStore();
+  const [viewMode, setViewMode] = useState<"table" | "chart" | "raw">("table");
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isMetadataOpen, setIsMetadataOpen] = useState(false);
 
   // Find the selected history item to show its metadata
   const selectedHistoryItem = useMemo(() => {
@@ -31,19 +32,30 @@ export default function DataViewer() {
 
   // Use either the most recent extracted data or the last item from history if none is active
   const displayData = useMemo(() => {
-    if (extractedData && extractedData.length > 0) return extractedData;
-    if (extractionHistory.length > 0) return extractionHistory[0].data;
-    return [];
+    let data = [];
+    if (extractedData && extractedData.length > 0) {
+      data = extractedData;
+    } else if (extractionHistory.length > 0) {
+      data = extractionHistory[0].data;
+    }
+    return Array.isArray(data) ? data : [data];
   }, [extractedData, extractionHistory]);
 
   const columnHelper = createColumnHelper<any>();
 
-  // Dynamic columns based on data keys
+  // Dynamic columns based on all data keys in the dataset
   const columns = useMemo(() => {
     if (displayData.length === 0) return [];
     
-    const keys = Object.keys(displayData[0]);
-    return keys.map(key => 
+    // Collect all unique keys from all rows to prevent missing columns
+    const allKeys = new Set<string>();
+    displayData.forEach(row => {
+      if (row && typeof row === 'object') {
+        Object.keys(row).forEach(key => allKeys.add(key));
+      }
+    });
+
+    return Array.from(allKeys).map(key => 
       columnHelper.accessor(key, {
         header: key.charAt(0).toUpperCase() + key.slice(1),
         cell: info => {
@@ -51,7 +63,7 @@ export default function DataViewer() {
           if (typeof val === 'object' && val !== null) {
             return JSON.stringify(val);
           }
-          return val;
+          return val === null || val === undefined ? "-" : String(val);
         },
       })
     );
@@ -89,7 +101,14 @@ export default function DataViewer() {
     try {
       if (displayData.length === 0) return;
       
-      const keys = Object.keys(displayData[0]);
+      const allKeysSet = new Set<string>();
+      displayData.forEach(row => {
+        if (row && typeof row === 'object') {
+          Object.keys(row).forEach(key => allKeysSet.add(key));
+        }
+      });
+      const keys = Array.from(allKeysSet);
+      
       const header = keys.join(",");
       const rows = displayData.map(obj => 
         keys.map(key => {
@@ -150,6 +169,13 @@ export default function DataViewer() {
               Chart
             </Button>
             <Button 
+              variant={viewMode === "raw" ? "default" : "outline"} 
+              onClick={() => setViewMode("raw")}
+            >
+              <FileText className="w-4 h-4 mr-2" />
+              Raw Response
+            </Button>
+            <Button 
               variant="outline" 
               onClick={exportToExcel} 
               disabled={displayData.length === 0}
@@ -178,67 +204,75 @@ export default function DataViewer() {
 
         {/* Metadata Banner */}
         {selectedHistoryItem?.config && (
-          <div className="flex flex-col gap-3 p-4 bg-muted/30 border rounded-lg shrink-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-1.5 mr-2">
-                <Cpu className="w-4 h-4 text-primary" />
-                <span className="text-sm font-semibold">{selectedHistoryItem.config.modelName}</span>
-              </div>
-              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                <Badge variant="outline" className="font-normal">Temp: {selectedHistoryItem.config.temperature}</Badge>
-                <Badge variant="outline" className="font-normal">Top-P: {selectedHistoryItem.config.topP}</Badge>
-                <Badge variant="outline" className="font-normal">Top-K: {selectedHistoryItem.config.topK}</Badge>
-                <Badge variant="outline" className="font-normal">NGL: {selectedHistoryItem.config.nGpuLayers}</Badge>
-                <Badge variant="secondary" className="font-normal ml-2">{selectedHistoryItem.config.llmMode.toUpperCase()}</Badge>
-                
-                {selectedHistoryItem.config.runtime && (
-                  <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20 font-semibold ml-1">
-                    {selectedHistoryItem.config.runtime.toUpperCase()}
-                  </Badge>
-                )}
-                
-                {(selectedHistoryItem.config.ttft !== undefined && selectedHistoryItem.config.ttft !== null) && (
-                  <div className="flex items-center gap-1 ml-2 px-2 py-0.5 bg-amber-500/10 text-amber-600 rounded-full border border-amber-500/20">
-                    <Gauge className="w-3 h-3" />
-                    <span>TTFT: {selectedHistoryItem.config.ttft}ms</span>
-                  </div>
-                )}
+          <div className="flex flex-col p-4 bg-muted/30 border rounded-lg shrink-0 transition-all duration-200">
+            <div 
+              className="flex flex-wrap items-center justify-between cursor-pointer group"
+              onClick={() => setIsMetadataOpen(!isMetadataOpen)}
+            >
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-1.5 mr-2">
+                  <Cpu className="w-4 h-4 text-primary" />
+                  <span className="text-sm font-semibold">{selectedHistoryItem.config.modelName}</span>
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <Badge variant="outline" className="font-normal">Temp: {selectedHistoryItem.config.temperature}</Badge>
+                  <Badge variant="outline" className="font-normal">NGL: {selectedHistoryItem.config.nGpuLayers}</Badge>
+                  <Badge variant="secondary" className="font-normal ml-2">{selectedHistoryItem.config.llmMode.toUpperCase()}</Badge>
+                  
+                  {selectedHistoryItem.config.runtime && (
+                    <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20 font-semibold ml-1">
+                      {selectedHistoryItem.config.runtime.toUpperCase()}
+                    </Badge>
+                  )}
+                  
+                  {(selectedHistoryItem.config.ttft !== undefined && selectedHistoryItem.config.ttft !== null) && (
+                    <div className="flex items-center gap-1 ml-2 px-2 py-0.5 bg-amber-500/10 text-amber-600 rounded-full border border-amber-500/20">
+                      <Gauge className="w-3 h-3" />
+                      <span>{selectedHistoryItem.config.ttft}ms</span>
+                    </div>
+                  )}
 
-                {(selectedHistoryItem.config.speed !== undefined && selectedHistoryItem.config.speed !== null) && (
-                  <div className="flex items-center gap-1 ml-1 px-2 py-0.5 bg-blue-500/10 text-blue-600 rounded-full border border-blue-200/20">
-                    <Zap className="w-3 h-3" />
-                    <span>Speed: {selectedHistoryItem.config.speed.toFixed(1)} t/s</span>
-                  </div>
-                )}
+                  {(selectedHistoryItem.config.speed !== undefined && selectedHistoryItem.config.speed !== null) && (
+                    <div className="flex items-center gap-1 ml-1 px-2 py-0.5 bg-blue-500/10 text-blue-600 rounded-full border border-blue-200/20">
+                      <Zap className="w-3 h-3" />
+                      <span>{selectedHistoryItem.config.speed.toFixed(1)} t/s</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="text-muted-foreground group-hover:text-foreground transition-colors">
+                {isMetadataOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
               </div>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t pt-3">
-              <div className="space-y-1">
-                <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                  <Zap className="w-3 h-3" /> System Prompt
+            {isMetadataOpen && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t pt-3 mt-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                    <Zap className="w-3 h-3" /> System Prompt
+                  </div>
+                  <div className="text-[11px] bg-background/50 p-2 rounded border max-h-32 overflow-y-auto whitespace-pre-wrap italic">
+                    {selectedHistoryItem.config.systemPrompt || "No system prompt used."}
+                  </div>
                 </div>
-                <div className="text-[11px] bg-background/50 p-2 rounded border max-h-20 overflow-y-auto whitespace-pre-wrap italic">
-                  {selectedHistoryItem.config.systemPrompt || "No system prompt used."}
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                    <FileText className="w-3 h-3" /> User Prompt
+                  </div>
+                  <div className="text-[11px] bg-background/50 p-2 rounded border max-h-32 overflow-y-auto whitespace-pre-wrap">
+                    {selectedHistoryItem.config.promptText || "No user prompt data."}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                    <Database className="w-3 h-3" /> JSON Format
+                  </div>
+                  <div className="text-[11px] bg-background/50 p-2 rounded border max-h-32 overflow-y-auto whitespace-pre-wrap font-mono">
+                    {selectedHistoryItem.config.customJsonFormat || "No format specified."}
+                  </div>
                 </div>
               </div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                  <FileText className="w-3 h-3" /> User Prompt
-                </div>
-                <div className="text-[11px] bg-background/50 p-2 rounded border max-h-20 overflow-y-auto whitespace-pre-wrap">
-                  {selectedHistoryItem.config.promptText || "No user prompt data."}
-                </div>
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                  <Database className="w-3 h-3" /> JSON Format
-                </div>
-                <div className="text-[11px] bg-background/50 p-2 rounded border max-h-20 overflow-y-auto whitespace-pre-wrap font-mono">
-                  {selectedHistoryItem.config.customJsonFormat || "No format specified."}
-                </div>
-              </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -315,7 +349,7 @@ export default function DataViewer() {
                 </Button>
               </div>
             </>
-          ) : (
+          ) : viewMode === "chart" ? (
             <>
               <CardHeader className="py-4 border-b shrink-0">
                 <CardTitle>Data Visualization</CardTitle>
@@ -346,6 +380,20 @@ export default function DataViewer() {
                     </ResponsiveContainer>
                   );
                 })()}
+              </CardContent>
+            </>
+          ) : (
+            <>
+              <CardHeader className="py-4 border-b shrink-0">
+                <CardTitle>LLM Raw Response</CardTitle>
+                <CardDescription>The original text generated by the model before parsing.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex-1 overflow-hidden p-0 relative bg-muted/10 font-mono text-xs">
+                <ScrollArea className="h-full w-full">
+                  <div className="p-6 whitespace-pre-wrap leading-relaxed">
+                    {selectedHistoryItem?.config?.rawResponse || extractedText || "No raw response data available."}
+                  </div>
+                </ScrollArea>
               </CardContent>
             </>
           )}

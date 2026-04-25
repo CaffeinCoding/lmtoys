@@ -30,7 +30,13 @@ export default function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
 
-  const { modelDownloadPath, setModelDownloadPath, hfToken, setHfToken, selectedRuntime, setSelectedRuntime, serverPort, setServerPort } = useAppStore();
+  const { 
+    modelDownloadPath, setModelDownloadPath, 
+    hfToken, setHfToken, 
+    selectedRuntime, setSelectedRuntime, 
+    serverPort, setServerPort,
+    updateDownloadProgress
+  } = useAppStore();
   const [downloadedModels, setDownloadedModels] = useState<ModelInfo[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<{ [key: string]: number }>({});
   const [isDownloading, setIsDownloading] = useState<{ [key: string]: boolean }>({});
@@ -162,6 +168,9 @@ export default function Settings() {
       const { filename, downloaded, total } = event.payload;
       const progress = Math.round((downloaded / total) * 100);
       setDownloadProgress(prev => ({ ...prev, [filename]: progress }));
+      
+      // Update global store
+      updateDownloadProgress(filename, progress, progress >= 100 ? 'completed' : 'downloading');
       
       if (progress >= 100) {
         setIsDownloading(prev => ({ ...prev, [filename]: false }));
@@ -441,6 +450,7 @@ export default function Settings() {
                                                 onClick={async () => {
                                                     setIsDownloading(prev => ({ ...prev, [fileName]: true }));
                                                     setDownloadProgress(prev => ({ ...prev, [fileName]: 0 }));
+                                                    updateDownloadProgress(fileName, 0, 'downloading');
                                                     try {
                                                         const url = `https://huggingface.co/${selectedModelId}/resolve/main/${fileName}?download=true`;
                                                         await invoke("download_model", { 
@@ -452,8 +462,10 @@ export default function Settings() {
                                                         });
                                                         const { emit } = await import("@tauri-apps/api/event");
                                                         await emit("models-changed");
-                                                        } catch (err) {                                                        console.error(err);
+                                                        } catch (err) {
+                                                        console.error(err);
                                                         setIsDownloading(prev => ({ ...prev, [fileName]: false }));
+                                                        updateDownloadProgress(fileName, 0, 'error');
                                                     }
                                                 }}
                                             >

@@ -14,6 +14,7 @@ interface ExtractionConfig {
   systemPrompt: string;
   promptText: string;
   customJsonFormat?: string;
+  rawResponse?: string;
   runtime?: string;
   ttft?: number | null;
   speed?: number | null;
@@ -86,6 +87,8 @@ interface AppState {
   // Inference Telemetry & Streaming State
   isStreaming: boolean;
   setIsStreaming: (streaming: boolean) => void;
+  extractedText: string;
+  setExtractedText: (text: string | ((prev: string) => string)) => void;
   tokensPerSecond: number | null;
   setTokensPerSecond: (tps: number | null) => void;
   timeToFirstToken: number | null;
@@ -96,6 +99,11 @@ interface AppState {
   setSysMemory: (mem: { total: number; used: number } | null) => void;
   sysVram: { total: number; used: number } | null;
   setSysVram: (vram: { total: number; used: number } | null) => void;
+
+  // Download State
+  downloadQueue: { name: string; progress: number; status: string }[];
+  setDownloadQueue: (queue: { name: string; progress: number; status: string }[]) => void;
+  updateDownloadProgress: (name: string, progress: number, status: string) => void;
 
   // Data History
   extractionHistory: { id: string; name: string; data: any[]; timestamp: number; config?: ExtractionConfig }[];
@@ -179,6 +187,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   isStreaming: false,
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
+  extractedText: "",
+  setExtractedText: (text) => set((state) => ({ 
+    extractedText: typeof text === 'function' ? text(state.extractedText) : text 
+  })),
   tokensPerSecond: null,
   setTokensPerSecond: (tps) => set({ tokensPerSecond: tps }),
   timeToFirstToken: null,
@@ -188,6 +200,29 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSysMemory: (mem) => set({ sysMemory: mem }),
   sysVram: null,
   setSysVram: (vram) => set({ sysVram: vram }),
+
+  downloadQueue: [],
+  setDownloadQueue: (queue: { name: string; progress: number; status: string }[]) => set({ downloadQueue: queue }),
+  updateDownloadProgress: (name: string, progress: number, status: string) => set((state) => {
+    const existing = state.downloadQueue.find(d => d.name === name);
+    if (existing) {
+      if (status === 'completed' || status === 'error') {
+        // Remove after 5 seconds if completed or error
+        setTimeout(() => {
+          set((s) => ({ downloadQueue: s.downloadQueue.filter(d => d.name !== name) }));
+        }, 5000);
+      }
+      return {
+        downloadQueue: state.downloadQueue.map(d => 
+          d.name === name ? { ...d, progress, status } : d
+        )
+      };
+    } else {
+      return {
+        downloadQueue: [...state.downloadQueue, { name, progress, status }]
+      };
+    }
+  }),
 
   extractionHistory: [],
   setExtractionHistory: (history) => set({ extractionHistory: history }),
@@ -215,6 +250,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       await store.set("nGpuLayers", state.nGpuLayers);
       await store.set("systemPrompt", state.systemPrompt);
       await store.set("promptText", state.promptText);
+      await store.set("customJsonFormat", state.customJsonFormat);
       await store.set("llmMode", state.llmMode);
       await store.set("cloudProvider", state.cloudProvider);
       await store.set("provider", state.provider);

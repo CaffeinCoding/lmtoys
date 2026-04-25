@@ -183,6 +183,8 @@ export default function Home() {
         setNGpuLayers,
         isStreaming,
         setIsStreaming,
+        extractedText,
+        setExtractedText,
         setTokensPerSecond,
         setTimeToFirstToken,
         parsedPdfText,
@@ -195,7 +197,6 @@ export default function Home() {
     const [scale, setScale] = useState<number>(1.0);
     const [searchText, setSearchText] = useState("");
     const [isExtracting, setIsExtracting] = useState(false);
-    const [extractedText, setExtractedText] = useState("");
     const [downloadedModels, setDownloadedModels] = useState<ModelInfo[]>([]);
     const [isTextParseOpen, setIsTextParseOpen] = useState(false);
     const [isJsonValid, setIsJsonValid] = useState(true);
@@ -472,7 +473,7 @@ export default function Home() {
                                         );
                                     }
                                     resultText += token;
-                                    setExtractedText((prev) => prev + token);
+                                    setExtractedText((prev: string) => prev + token);
                                     tokenCount++;
                                 }
                             } catch (e) {
@@ -517,6 +518,7 @@ export default function Home() {
                     systemPrompt: state.systemPrompt,
                     promptText: state.promptText,
                     customJsonFormat: state.customJsonFormat,
+                    rawResponse: resultText,
                     runtime: state.selectedRuntime,
                     ttft: Math.round(firstTokenTime || 0),
                     speed: tokenCount / durationSeconds
@@ -577,6 +579,7 @@ export default function Home() {
                 systemPrompt: state.systemPrompt,
                 promptText: state.promptText,
                 customJsonFormat: state.customJsonFormat,
+                rawResponse: resultText,
                 runtime: state.llmMode === "local" ? (state.provider === "builtin" ? state.selectedRuntime : "External") : "Cloud",
                 ttft: state.timeToFirstToken,
                 speed: state.tokensPerSecond

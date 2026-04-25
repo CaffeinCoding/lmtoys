@@ -53,6 +53,7 @@ pub async fn start_llama_server(
     model: String,
     ctx_size: u32,
     ngl: u32,
+    is_vision: bool,
     grammar: Option<String>,
     app: AppHandle,
     state: State<'_, LlmState>,
@@ -102,7 +103,9 @@ pub async fn start_llama_server(
                 }
             }
 
-            add_mmproj_if_exists(&mut cmd, &model);
+            if is_vision {
+                add_mmproj_if_exists(&mut cmd, &model);
+            }
 
             #[cfg(windows)]
             {
@@ -136,7 +139,9 @@ pub async fn start_llama_server(
                     }
                 }
 
-                add_mmproj_if_exists(&mut cmd, &model);
+                if is_vision {
+                    add_mmproj_if_exists(&mut cmd, &model);
+                }
 
                 #[cfg(windows)]
                 {
@@ -173,7 +178,9 @@ pub async fn start_llama_server(
         }
     }
 
-    add_mmproj_if_exists(&mut cmd, &model);
+    if is_vision {
+        add_mmproj_if_exists(&mut cmd, &model);
+    }
 
     #[cfg(windows)]
     {
