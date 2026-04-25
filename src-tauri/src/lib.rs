@@ -315,7 +315,8 @@ pub fn run() {
             get_all_files_in_dir,
             get_supported_runtimes,
             llm_runner::start_llama_server,
-            llm_runner::stop_llama_server
+            llm_runner::stop_llama_server,
+            llm_runner::get_llama_server_status
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

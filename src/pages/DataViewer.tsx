@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import * as XLSX from "xlsx";
-import { TableProperties, BarChart3, Trash2, FileSpreadsheet, FileText, History, ChevronRight, ChevronLeft, Cpu, Zap, Gauge } from "lucide-react";
+import { TableProperties, BarChart3, Trash2, FileSpreadsheet, FileText, History, ChevronRight, ChevronLeft, Cpu, Zap, Gauge, Database } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
@@ -213,7 +213,7 @@ export default function DataViewer() {
               </div>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t pt-3">
               <div className="space-y-1">
                 <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
                   <Zap className="w-3 h-3" /> System Prompt
@@ -228,6 +228,14 @@ export default function DataViewer() {
                 </div>
                 <div className="text-[11px] bg-background/50 p-2 rounded border max-h-20 overflow-y-auto whitespace-pre-wrap">
                   {selectedHistoryItem.config.promptText || "No user prompt data."}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                  <Database className="w-3 h-3" /> JSON Format
+                </div>
+                <div className="text-[11px] bg-background/50 p-2 rounded border max-h-20 overflow-y-auto whitespace-pre-wrap font-mono">
+                  {selectedHistoryItem.config.customJsonFormat || "No format specified."}
                 </div>
               </div>
             </div>

@@ -177,7 +177,8 @@ export function Header() {
         port: serverPort,
         model: `${modelDownloadPath}\\${builtInModel}`,
         ctxSize: maxTokens,
-        ngl: nGpuLayers
+        ngl: nGpuLayers,
+        grammar: null
       });
       
       const pollInterval = setInterval(async () => {

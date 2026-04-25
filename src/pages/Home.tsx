@@ -41,6 +41,14 @@ import { cn } from "@/lib/utils";
 // Configure PDF.js worker to use CDN to prevent Vite bundling issues
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
+const JSON_GBNF = `root   ::= object
+value  ::= object | array | string | number | ("true" | "false" | "null")
+object ::= "{" ws (string ":" ws value ("," ws string ":" ws value)*)? ws "}"
+array  ::= "[" ws (value ("," ws value)*)? ws "]"
+string ::= "\\"" ([^"\\\\\\x00-\\x1F] | "\\\\" (["\\\\/bfnrt] | "u" [0-9a-fA-F]{4}))* "\\""
+number ::= "-"? ([0-9] | [1-9][0-9]*) ("." [0-9]+)? ([eE] [+-]? [0-9]+)?
+ws     ::= [ \\t\\n\\r]*`;
+
 interface ModelInfo {
     name: string;
     repo: string;
@@ -421,6 +429,7 @@ export default function Home() {
                             max_tokens: maxTokens,
                             top_p: topP,
                             presence_penalty: repeatPenalty,
+                            grammar: JSON_GBNF,
                         }),
                         signal: controller.signal,
                     },
@@ -507,6 +516,7 @@ export default function Home() {
                     nGpuLayers: state.nGpuLayers,
                     systemPrompt: state.systemPrompt,
                     promptText: state.promptText,
+                    customJsonFormat: state.customJsonFormat,
                     runtime: state.selectedRuntime,
                     ttft: Math.round(firstTokenTime || 0),
                     speed: tokenCount / durationSeconds
@@ -566,6 +576,7 @@ export default function Home() {
                 nGpuLayers: state.nGpuLayers,
                 systemPrompt: state.systemPrompt,
                 promptText: state.promptText,
+                customJsonFormat: state.customJsonFormat,
                 runtime: state.llmMode === "local" ? (state.provider === "builtin" ? state.selectedRuntime : "External") : "Cloud",
                 ttft: state.timeToFirstToken,
                 speed: state.tokensPerSecond
@@ -654,83 +665,94 @@ export default function Home() {
                         </div>
                     </CardTitle>
                     </CardHeader>
-                    <CardContent className="flex-1 overflow-auto bg-muted/20 p-0 relative flex justify-center min-h-0">
+                    <CardContent className="flex-1 overflow-auto bg-muted/20 p-0 relative flex flex-col items-center min-h-0">
                         {currentPdfPath && pdfFile ? (
-                            <div className="py-4">
-                                <Document
-                                    file={pdfFile}
-                                    onLoadSuccess={onDocumentLoadSuccess}
-                                    loading={
-                                        <div className="flex items-center justify-center h-64">
-                                            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                                        </div>
-                                    }
-                                >
-                                    <Page
-                                        pageNumber={pageNumber}
-                                        width={600}
-                                        scale={scale}
-                                        // @ts-ignore - react-pdf typings for customTextRenderer are sometimes too strict
-                                        customTextRenderer={textRenderer}
-                                        className="shadow-md transition-transform duration-200"
-                                    />
-                                </Document>
-                                {numPages && (
-                                    <>
-                                        <div className="flex justify-between items-center mt-4 px-4 pb-4">
-                                            <Button
-                                                variant="outline"
-                                                disabled={pageNumber <= 1}
-                                                onClick={() =>
-                                                    setPageNumber((p) => p - 1)
-                                                }
-                                            >
-                                                Previous
-                                            </Button>
-                                            <span className="text-sm">
-                                                Page {pageNumber} of {numPages}
-                                            </span>
-                                            <Button
-                                                variant="outline"
-                                                disabled={
-                                                    pageNumber >= numPages
-                                                }
-                                                onClick={() =>
-                                                    setPageNumber((p) => p + 1)
-                                                }
-                                            >
-                                                Next
-                                            </Button>
-                                        </div>
-                                        <div className="flex justify-center items-center gap-2 pb-4">
-                                            <Button
-                                                variant="secondary"
-                                                size="sm"
-                                                onClick={() =>
-                                                    setScale((s) =>
-                                                        Math.max(0.5, s - 0.2),
-                                                    )
-                                                }
-                                            >
-                                                Zoom Out
-                                            </Button>
-                                            <span className="text-sm w-12 text-center">
-                                                {Math.round(scale * 100)}%
-                                            </span>
-                                            <Button
-                                                variant="secondary"
-                                                size="sm"
-                                                onClick={() =>
-                                                    setScale((s) =>
-                                                        Math.min(3.0, s + 0.2),
-                                                    )
-                                                }
-                                            >
-                                                Zoom In
-                                            </Button>
-                                        </div>
-                                    </>
-                                )}
+                            <div className="w-full flex flex-col items-center">
+                                {/* PDF Controls at Top */}
+                                <div className="w-full border-b bg-background/50 backdrop-blur-sm sticky top-0 z-10 py-2 px-4 flex flex-wrap justify-center items-center gap-4">
+                                    <div className="flex items-center gap-2">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={pageNumber <= 1}
+                                            onClick={() =>
+                                                setPageNumber((p) => p - 1)
+                                            }
+                                            className="h-8"
+                                        >
+                                            Previous
+                                        </Button>
+                                        <span className="text-sm font-medium min-w-[80px] text-center">
+                                            Page {pageNumber} / {numPages || "?"}
+                                        </span>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={
+                                                numPages ? pageNumber >= numPages : true
+                                            }
+                                            onClick={() =>
+                                                setPageNumber((p) => p + 1)
+                                            }
+                                            className="h-8"
+                                        >
+                                            Next
+                                        </Button>
+                                    </div>
+                                    
+                                    <div className="h-4 w-[1px] bg-border hidden sm:block" />
+
+                                    <div className="flex items-center gap-2">
+                                        <Button
+                                            variant="secondary"
+                                            size="sm"
+                                            onClick={() =>
+                                                setScale((s) =>
+                                                    Math.max(0.5, s - 0.2),
+                                                )
+                                            }
+                                            className="h-8"
+                                        >
+                                            Zoom Out
+                                        </Button>
+                                        <span className="text-sm w-12 text-center font-medium">
+                                            {Math.round(scale * 100)}%
+                                        </span>
+                                        <Button
+                                            variant="secondary"
+                                            size="sm"
+                                            onClick={() =>
+                                                setScale((s) =>
+                                                    Math.min(3.0, s + 0.2),
+                                                )
+                                            }
+                                            className="h-8"
+                                        >
+                                            Zoom In
+                                        </Button>
+                                    </div>
+                                </div>
+
+                                <div className="py-4">
+                                    <Document
+                                        file={pdfFile}
+                                        onLoadSuccess={onDocumentLoadSuccess}
+                                        loading={
+                                            <div className="flex items-center justify-center h-64">
+                                                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                                            </div>
+                                        }
+                                    >
+                                        <Page
+                                            pageNumber={pageNumber}
+                                            width={600}
+                                            scale={scale}
+                                            // @ts-ignore - react-pdf typings for customTextRenderer are sometimes too strict
+                                            customTextRenderer={textRenderer}
+                                            className="shadow-md transition-transform duration-200"
+                                        />
+                                    </Document>
+                                </div>
                             </div>
                         ) : (
                             <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">

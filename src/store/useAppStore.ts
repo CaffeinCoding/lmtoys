@@ -13,6 +13,7 @@ interface ExtractionConfig {
   nGpuLayers: number;
   systemPrompt: string;
   promptText: string;
+  customJsonFormat?: string;
   runtime?: string;
   ttft?: number | null;
   speed?: number | null;

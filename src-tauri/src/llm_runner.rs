@@ -53,6 +53,7 @@ pub async fn start_llama_server(
     model: String,
     ctx_size: u32,
     ngl: u32,
+    grammar: Option<String>,
     app: AppHandle,
     state: State<'_, LlmState>,
 ) -> Result<(), String> {
@@ -91,6 +92,16 @@ pub async fn start_llama_server(
                .stdout(Stdio::piped())
                .stderr(Stdio::piped());
             
+            if let Some(ref g) = grammar {
+                if !g.is_empty() {
+                    if Path::new(g).exists() {
+                        cmd.arg("--grammar-file").arg(g);
+                    } else {
+                        cmd.arg("--grammar").arg(g);
+                    }
+                }
+            }
+
             add_mmproj_if_exists(&mut cmd, &model);
 
             #[cfg(windows)]
@@ -114,6 +125,16 @@ pub async fn start_llama_server(
                    .arg("-ngl").arg(ngl.to_string())
                    .stdout(Stdio::piped())
                    .stderr(Stdio::piped());
+
+                if let Some(ref g) = grammar {
+                    if !g.is_empty() {
+                        if Path::new(g).exists() {
+                            cmd.arg("--grammar-file").arg(g);
+                        } else {
+                            cmd.arg("--grammar").arg(g);
+                        }
+                    }
+                }
 
                 add_mmproj_if_exists(&mut cmd, &model);
 
@@ -142,6 +163,16 @@ pub async fn start_llama_server(
        .stdout(Stdio::piped())
        .stderr(Stdio::piped());
 
+    if let Some(ref g) = grammar {
+        if !g.is_empty() {
+            if Path::new(g).exists() {
+                cmd.arg("--grammar-file").arg(g);
+            } else {
+                cmd.arg("--grammar").arg(g);
+            }
+        }
+    }
+
     add_mmproj_if_exists(&mut cmd, &model);
 
     #[cfg(windows)]
@@ -154,6 +185,26 @@ pub async fn start_llama_server(
 
     let child = cmd.spawn().map_err(|e| format!("Failed to start llama-server: {}", e))?;
     handle_child_process(child, app, state)
+}
+
+#[tauri::command]
+pub async fn get_llama_server_status(state: State<'_, LlmState>) -> Result<String, String> {
+    let mut process_guard = state.process.lock().unwrap();
+    if let Some(ref mut child) = *process_guard {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                Ok(format!("offline (exited with code {:?})", status.code()))
+            }
+            Ok(None) => {
+                Ok("running".into())
+            }
+            Err(e) => {
+                Ok(format!("error checking status: {}", e))
+            }
+        }
+    } else {
+        Ok("offline".into())
+    }
 }
 
 fn handle_child_process(mut child: Child, app: AppHandle, state: State<'_, LlmState>) -> Result<(), String> {

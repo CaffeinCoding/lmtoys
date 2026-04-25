@@ -6,6 +6,7 @@ import { GlobalStatusBar } from "../GlobalStatusBar";
 import { Header } from "./Header";
 import { useEffect } from "react";
 import { useAppStore } from "@/store/useAppStore";
+import { invoke } from "@tauri-apps/api/core";
 
 export default function AppLayout() {
   const { pathname } = useLocation();
@@ -31,7 +32,8 @@ export default function AppLayout() {
     setSystemPrompt,
     setPromptText,
     setIsInitializing,
-    setExtractionMode
+    setExtractionMode,
+    setServerStatus
   } = useAppStore();
 
   useEffect(() => {
@@ -41,6 +43,19 @@ export default function AppLayout() {
         const { load } = await import("@tauri-apps/plugin-store");
         const store = await load("settings.json");
         
+        // 0. Sync Llama Server Status
+        try {
+          const status = await invoke<string>("get_llama_server_status");
+          if (status === "running") {
+            setServerStatus("running");
+          } else {
+            setServerStatus("offline");
+          }
+        } catch (e) {
+          console.error("Failed to sync server status", e);
+          setServerStatus("offline");
+        }
+
         // 1. Load basic settings
         const llm_mode = await store.get<string>("llmMode");
         if (llm_mode) setLlmMode(llm_mode as any);
