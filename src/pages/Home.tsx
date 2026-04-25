@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { load } from "@tauri-apps/plugin-store";
 import { appDataDir } from "@tauri-apps/api/path";
 import { useNavigate } from "react-router-dom";
@@ -78,7 +77,6 @@ export default function Home() {
     const [isExtracting, setIsExtracting] = useState(false);
     const [extractedText, setExtractedText] = useState("");
     const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
-    const [builtInMetadata, setBuiltInMetadata] = useState<any | null>(null);
     const [isTextParseOpen, setIsTextParseOpen] = useState(false);
     const [isJsonValid, setIsJsonValid] = useState(true);
     const { setModelDownloadPath } = useAppStore();
@@ -110,19 +108,6 @@ export default function Home() {
         }
         initPath();
     }, [modelDownloadPath, setModelDownloadPath]);
-
-    useEffect(() => {
-        if (provider === "builtin" && modelDownloadPath && builtInModel) {
-            invoke("get_gguf_metadata", { path: modelDownloadPath, filename: builtInModel })
-                .then(setBuiltInMetadata)
-                .catch(err => {
-                    console.error("Failed to parse GGUF metadata", err);
-                    setBuiltInMetadata(null);
-                });
-        } else {
-            setBuiltInMetadata(null);
-        }
-    }, [provider, modelDownloadPath, builtInModel]);
 
     useEffect(() => {
         if (provider === "builtin" && modelDownloadPath) {
@@ -298,44 +283,83 @@ ${promptText}`;
                     throw new Error("Unknown cloud provider selected.");
                 }
             } else if (provider === "builtin") {
-                // 3. Llama.cpp Built-in 로컬 추론 실행
-                if (!builtInModel) throw new Error("Please select a built-in model.");
-                if (!modelDownloadPath) throw new Error("Model download path is not configured.");
+                // 3. Llama-server (Built-in) 로컬 추론 실행
+                const currentStatus = useAppStore.getState().serverStatus;
+                if (currentStatus !== "running") {
+                    throw new Error("Llama Server is not running. Please start it from the top header.");
+                }
 
                 setIsStreaming(true);
                 setExtractedText("");
-                
-                // Tauri Event Listener for Token Stream
-                const unlisten = await listen<string>("token_stream", (event) => {
-                    setExtractedText((prev) => prev + event.payload);
+
+                const startTime = performance.now();
+                let firstTokenTime: number | null = null;
+                const port = useAppStore.getState().serverPort;
+
+                response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        model: builtInModel || "local-model",
+                        messages: [
+                            { role: "system", content: finalSystemPrompt },
+                            { role: "user", content: finalUserPrompt },
+                        ],
+                        stream: true,
+                        temperature,
+                        max_tokens: maxTokens,
+                        top_p: topP,
+                        presence_penalty: repeatPenalty,
+                    }),
                 });
 
-                const builtinResultString = await invoke<string>("run_builtin_model", {
-                    path: modelDownloadPath,
-                    filename: builtInModel,
-                    prompt: finalUserPrompt,
-                    systemPrompt: finalSystemPrompt,
-                    temperature,
-                    topP,
-                    repeatPenalty,
-                    nGpuLayers,
-                    maxTokens,
-                });
-
-                unlisten(); // Stop listening
-                setIsStreaming(false);
-
-                // Built-in returns a JSON string containing text, ttft_ms, tps
-                let resultObj;
-                try {
-                    resultObj = JSON.parse(builtinResultString);
-                    setTimeToFirstToken(resultObj.ttft_ms);
-                    setTokensPerSecond(resultObj.tps);
-                } catch (e) {
-                    throw new Error(`Failed to parse stats from built-in model:\n${builtinResultString}`);
+                if (!response.ok) {
+                    throw new Error(`Llama Server returned ${response.status}`);
                 }
 
-                const cleanedBuiltin = resultObj.text
+                if (!response.body) throw new Error("No response body");
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let resultText = "";
+                let tokenCount = 0;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split("\n");
+
+                    for (const line of lines) {
+                        const trimmedLine = line.trim();
+                        if (trimmedLine.startsWith("data: ") && trimmedLine !== "data: [DONE]") {
+                            try {
+                                const data = JSON.parse(trimmedLine.slice(6));
+                                const token = data.choices[0]?.delta?.content || "";
+                                if (token) {
+                                    if (tokenCount === 0) {
+                                        firstTokenTime = performance.now() - startTime;
+                                        setTimeToFirstToken(Math.round(firstTokenTime));
+                                    }
+                                    resultText += token;
+                                    setExtractedText((prev) => prev + token);
+                                    tokenCount++;
+                                }
+                            } catch (e) {
+                                // skip parse error
+                            }
+                        }
+                    }
+                }
+
+                setIsStreaming(false);
+
+                const endTime = performance.now();
+                const durationSeconds = (endTime - startTime) / 1000;
+                setTokensPerSecond(tokenCount / durationSeconds);
+
+                const cleanedBuiltin = resultText
                     .replace(/```json/gi, "")
                     .replace(/```/g, "")
                     .trim();
@@ -343,12 +367,13 @@ ${promptText}`;
                 try {
                     parsedData = JSON.parse(cleanedBuiltin);
                 } catch (e) {
-                    throw new Error(`Failed to parse JSON array from built-in model:\n${resultObj.text}`);
+                    throw new Error(`Failed to parse JSON array from built-in model:\n${resultText}`);
                 }
                 setExtractedData(
                     Array.isArray(parsedData) ? parsedData : [parsedData],
                 );
                 setIsExtracting(false);
+                navigate("/data");
                 return; // 여기서 종료 — fetch 기반 흐름을 건너뜀
             } else if (provider === "ollama") {
                 // 3a. Ollama API로 전송
@@ -468,7 +493,7 @@ ${promptText}`;
         [searchText]
     );
 
-    const maxTokensLimit = llmMode === "local" ? (provider === "builtin" ? (builtInMetadata?.context_length || 131072) : 262144) : 8192;
+    const maxTokensLimit = llmMode === "local" ? 262144 : 8192;
 
     return (
         <div className="p-4 sm:p-6 flex flex-col lg:flex-row gap-6 items-start">
@@ -680,24 +705,6 @@ ${promptText}`;
                                                         No models downloaded. Please visit Settings to download a model.
                                                     </div>
                                                 )}
-                                                {builtInMetadata && (() => {
-                                                    const supportedArchs = ["llama", "gemma", "gemma2", "gemma3", "gemma4", "phi", "phi2", "phi3", "qwen", "qwen2", "qwen2moe", "starcoder2", "internlm2"];
-                                                    const isSupported = supportedArchs.includes(builtInMetadata.architecture.toLowerCase());
-                                                    return (
-                                                        <div className="flex flex-wrap gap-2 pt-1">
-                                                            <span className={`text-xs px-2 py-1 rounded-md border ${isSupported ? "bg-green-500/20 text-green-500 border-green-500/50" : "bg-orange-500/20 text-orange-500 border-orange-500/50"}`}>
-                                                                {isSupported ? "✓" : "⚠"} {builtInMetadata.architecture}
-                                                            </span>
-                                                            <span className="text-xs bg-muted px-2 py-1 rounded-md border">Ctx: {(builtInMetadata.context_length / 1024).toFixed(0)}k</span>
-                                                            {builtInMetadata.has_vision && (
-                                                                <span className="text-xs bg-blue-500/20 text-blue-500 px-2 py-1 rounded-md border border-blue-500/50">Vision</span>
-                                                            )}
-                                                            {!isSupported && (
-                                                                <p className="text-xs text-orange-500 w-full">이 아키텍처는 Candle 내장 엔진에서 직접 지원되지 않습니다. Ollama 또는 LM Studio를 사용해 주세요.</p>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })()}
                                             </div>
                                         ) : (
                                             <div className="space-y-2">

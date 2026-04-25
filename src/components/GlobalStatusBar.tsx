@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "@/store/useAppStore";
+import { Loader2 } from "lucide-react";
 
 /**
  * GlobalStatusBar
@@ -10,7 +11,10 @@ import { useAppStore } from "@/store/useAppStore";
  */
 export function GlobalStatusBar() {
   const {
+    builtInModel,
     selectedRuntime,
+    serverStatus,
+    serverPort,
     timeToFirstToken,
     tokensPerSecond,
     sysMemory, setSysMemory,
@@ -57,18 +61,35 @@ export function GlobalStatusBar() {
 
   return (
     <div className="h-7 bg-background border-t flex items-center justify-between px-4 text-[10px] text-muted-foreground shrink-0 gap-6">
-      {/* Left: Runtime + Memory */}
+      {/* Left: Server Status & Model Info */}
       <div className="flex items-center gap-4">
-        {/* Runtime badge */}
+        {/* Server Status */}
         <div className="flex items-center gap-1.5 font-medium text-foreground">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-          {runtimeLabel[selectedRuntime] ?? selectedRuntime.toUpperCase()}
+          {serverStatus === "offline" && <span className="w-2 h-2 rounded-full bg-muted-foreground" title="Offline" />}
+          {serverStatus === "loading" && <Loader2 className="w-3 h-3 animate-spin text-amber-500" />}
+          {serverStatus === "running" && <span className="w-2 h-2 rounded-full bg-green-500" title="Running" />}
+          
+          <span className="capitalize">{serverStatus}</span>
         </div>
 
+        {/* Model Info if running or loading */}
+        {serverStatus !== "offline" && builtInModel && (
+          <div className="flex items-center gap-2">
+            <span className="truncate max-w-[200px]" title={builtInModel}>
+              {builtInModel} ({runtimeLabel[selectedRuntime] ?? selectedRuntime.toUpperCase()})
+            </span>
+            <span className="opacity-50">|</span>
+            <span>Port: {serverPort}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Right: Resources & Telemetry */}
+      <div className="flex items-center gap-4">
         {/* RAM bar */}
         {ramText && (
           <div className="flex items-center gap-1.5">
-            <div className="w-20 h-1.5 rounded-full bg-muted overflow-hidden">
+            <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
               <div
                 className={`h-full rounded-full ${barColor(ramPercent)}`}
                 style={{ width: `${Math.min(ramPercent, 100)}%` }}
@@ -81,7 +102,7 @@ export function GlobalStatusBar() {
         {/* VRAM bar */}
         {vramText && (
           <div className="flex items-center gap-1.5">
-            <div className="w-20 h-1.5 rounded-full bg-muted overflow-hidden">
+            <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
               <div
                 className={`h-full rounded-full ${barColor(vramPercent)}`}
                 style={{ width: `${Math.min(vramPercent, 100)}%` }}
@@ -90,10 +111,9 @@ export function GlobalStatusBar() {
             <span>{vramText}</span>
           </div>
         )}
-      </div>
 
-      {/* Right: Inference telemetry */}
-      <div className="flex items-center gap-4">
+        <div className="w-[1px] h-3 bg-border opacity-50 mx-1" />
+
         <span>
           <span className="font-semibold text-foreground">TTFT</span>{" "}
           {timeToFirstToken != null ? `${timeToFirstToken} ms` : "—"}

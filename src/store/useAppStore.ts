@@ -49,6 +49,15 @@ interface AppState {
   selectedRuntime: "cpu" | "vulkan" | "cuda" | "cuda12";
   setSelectedRuntime: (runtime: "cpu" | "vulkan" | "cuda" | "cuda12") => void;
 
+  // Llama Server State
+  serverStatus: "offline" | "loading" | "running";
+  setServerStatus: (status: "offline" | "loading" | "running") => void;
+  serverPort: number;
+  setServerPort: (port: number) => void;
+  serverLogs: string[];
+  addServerLog: (log: string) => void;
+  clearServerLogs: () => void;
+
   // Inference Telemetry & Streaming State
   isStreaming: boolean;
   setIsStreaming: (streaming: boolean) => void;
@@ -108,6 +117,14 @@ export const useAppStore = create<AppState>((set) => ({
   setNGpuLayers: (layers) => set({ nGpuLayers: layers }),
   selectedRuntime: "cpu",
   setSelectedRuntime: (runtime) => set({ selectedRuntime: runtime }),
+
+  serverStatus: "offline",
+  setServerStatus: (status) => set({ serverStatus: status }),
+  serverPort: 8080,
+  setServerPort: (port) => set({ serverPort: port }),
+  serverLogs: [],
+  addServerLog: (log) => set((state) => ({ serverLogs: [...state.serverLogs, log].slice(-1000) })), // keep last 1000 logs
+  clearServerLogs: () => set({ serverLogs: [] }),
 
   isStreaming: false,
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),

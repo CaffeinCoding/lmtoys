@@ -1,28 +1,17 @@
 use sysinfo::System;
 use std::path::PathBuf;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use futures_util::StreamExt;
 use std::fs::File;
 use std::io::Write;
-use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{LlamaModel, AddBos};
-use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::sampling::LlamaSampler;
+
+mod llm_runner;
 
 #[derive(Clone, serde::Serialize)]
 struct DownloadProgress {
     filename: String,
     downloaded: u64,
     total: Option<u64>,
-}
-
-#[derive(serde::Serialize)]
-struct GgufMetadata {
-    architecture: String,
-    context_length: u64,
-    has_vision: bool,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -32,17 +21,14 @@ fn greet(name: &str) -> String {
 }
 
 /// Returns a list of GPU runtimes supported by this binary build.
-/// "cpu" is always included. "vulkan" / "cuda" are only included when
-/// the binary was compiled with the corresponding feature flag.
+/// In the 2-layer architecture, these rely on bundled `llama-server` executables.
 #[tauri::command]
 fn get_supported_runtimes() -> Vec<String> {
-    #[allow(unused_mut)]
-    let mut runtimes = vec!["cpu".to_string()];
-    #[cfg(feature = "vulkan")]
-    runtimes.push("vulkan".to_string());
-    #[cfg(feature = "cuda")]
-    runtimes.push("cuda".to_string());
-    runtimes
+    vec![
+        "cpu".to_string(),
+        "vulkan".to_string(),
+        "cuda12".to_string()
+    ]
 }
 
 #[tauri::command]
@@ -200,170 +186,20 @@ fn get_all_files_in_dir(path: String) -> Result<Vec<String>, String> {
     Ok(files)
 }
 
-#[tauri::command]
-fn get_gguf_metadata(path: String, filename: String) -> Result<GgufMetadata, String> {
-    let mut dest_path = PathBuf::from(&path);
-    dest_path.push(filename);
-    
-    let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
-    let mut params = LlamaModelParams::default();
-    params = params.with_vocab_only(true);
-
-    let model = LlamaModel::load_from_file(&backend, &dest_path, &params).map_err(|e| format!("Failed to load metadata: {}", e))?;
-    
-    let architecture = model.meta_val_str("general.architecture").unwrap_or_else(|_| "unknown".to_string());
-    
-    let ctx_key = format!("{}.context_length", architecture);
-    let context_length = model.meta_val_str(&ctx_key)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(4096);
-        
-    let arch_lower = architecture.to_lowercase();
-    let has_vision = arch_lower.contains("llava") || arch_lower.contains("vl") || arch_lower.contains("qwen-vl") || arch_lower.contains("vision");
-    
-    Ok(GgufMetadata {
-        architecture,
-        context_length,
-        has_vision,
-    })
-}
-
-#[tauri::command]
-async fn run_builtin_model(
-    path: String,
-    filename: String,
-    prompt: String,
-    system_prompt: String,
-    temperature: f64,
-    top_p: f64,
-    repeat_penalty: f64,
-    n_gpu_layers: u32,
-    max_tokens: usize,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
-    let mut model_path = PathBuf::from(&path);
-    model_path.push(&filename);
-
-    tracing::info!("Initializing llama_cpp backend for {}", filename);
-    let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
-    let model_params = LlamaModelParams::default()
-        .with_n_gpu_layers(n_gpu_layers);
-    
-    let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
-        .map_err(|e| format!("Failed to load model. It might be incompatible or corrupted: {}", e))?;
-
-    // Combine system prompt and user prompt
-    let full_prompt = if system_prompt.trim().is_empty() {
-        prompt.clone()
-    } else {
-        format!("System: {}\n\nUser: {}", system_prompt, prompt)
-    };
-
-    // Tokenize prompt first to know required context size
-    let sanitized_prompt = full_prompt.replace('\0', "");
-    let tokens = model.str_to_token(&sanitized_prompt, AddBos::Always)
-        .map_err(|e| format!("Failed to tokenize prompt: {}", e))?;
-        
-    tracing::info!("Prompt tokenized to {} tokens", tokens.len());
-
-    let req_ctx_size = tokens.len() as u32 + max_tokens as u32 + 1024;
-    let n_batch = 2048;
-
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(std::num::NonZeroU32::new(req_ctx_size).unwrap_or(std::num::NonZeroU32::new(2048).unwrap())))
-        .with_n_batch(n_batch);
-    
-    let mut ctx = model.new_context(&backend, ctx_params)
-        .map_err(|e| format!("Failed to create context: {}", e))?;
-
-    let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::penalties(64, repeat_penalty as f32, 0.0, 0.0),
-        if temperature > 0.0 { LlamaSampler::temp(temperature as f32) } else { LlamaSampler::greedy() },
-        LlamaSampler::top_p(if top_p > 0.0 && top_p < 1.0 { top_p as f32 } else { 1.0 }, 1),
-        LlamaSampler::greedy(),
-    ]);
-
-    let mut generated_text = String::new();
-    let mut batch = LlamaBatch::new(n_batch as usize, 1);
-    
-    // Evaluate initial prompt in chunks to respect n_batch limit
-    let mut n_cur = 0;
-    
-    let start_time = std::time::Instant::now();
-    let mut time_to_first_token: Option<u128> = None;
-    
-    for chunk in tokens.chunks(n_batch as usize) {
-        batch.clear();
-        for (i, &token) in chunk.iter().enumerate() {
-            let is_last = (n_cur + i as i32) == (tokens.len() as i32 - 1);
-            batch.add(token, n_cur + i as i32, &[0], is_last).map_err(|e| e.to_string())?;
-        }
-        ctx.decode(&mut batch).map_err(|e| format!("Decode failed on prompt chunk: {}", e))?;
-        n_cur += chunk.len() as i32;
-    }
-
-    let mut generated_tokens_count = 0;
-
-    for _ in 0..max_tokens {
-        let new_token = sampler.sample(&ctx, batch.n_tokens() - 1);
-        sampler.accept(new_token);
-        
-        if time_to_first_token.is_none() {
-            time_to_first_token = Some(start_time.elapsed().as_millis());
-        }
-        
-        if model.is_eog_token(new_token) {
-            break;
-        }
-        
-        // Convert token to string representation
-        if let Ok(bytes) = model.token_to_piece_bytes(new_token, 32, true, None) {
-            if let Ok(piece) = String::from_utf8(bytes) {
-                generated_text.push_str(&piece);
-                generated_tokens_count += 1;
-                
-                // Emit streaming event
-                let _ = app.emit("token_stream", piece.clone());
-            }
-        }
-        
-        batch.clear();
-        batch.add(new_token, n_cur, &[0], true).map_err(|e| e.to_string())?;
-        n_cur += 1;
-        
-        if let Err(e) = ctx.decode(&mut batch) {
-            tracing::warn!("Decode failed during generation: {}", e);
-            break;
-        }
-    }
-
-    let elapsed = start_time.elapsed().as_secs_f64();
-    let tps = if elapsed > 0.0 { generated_tokens_count as f64 / elapsed } else { 0.0 };
-    let ttft = time_to_first_token.unwrap_or(0);
-
-    tracing::info!("Generation complete. TTFT: {}ms, TPS: {:.2}", ttft, tps);
-    
-    let result = serde_json::json!({
-        "text": generated_text,
-        "ttft_ms": ttft,
-        "tps": tps
-    });
-
-    Ok(result.to_string())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("tauri_app_lib=info".parse().unwrap()))
         .init();
 
-    tauri::Builder::default()
+    let llm_state = llm_runner::LlmState::new();
+
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .manage(llm_state)
         .invoke_handler(tauri::generate_handler![
             greet, 
             get_system_memory,
@@ -373,10 +209,18 @@ pub fn run() {
             get_downloaded_models,
             delete_model,
             get_all_files_in_dir,
-            get_gguf_metadata,
-            run_builtin_model,
-            get_supported_runtimes
+            get_supported_runtimes,
+            llm_runner::start_llama_server,
+            llm_runner::stop_llama_server
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    builder.run(|app_handle, event| match event {
+        tauri::RunEvent::Exit => {
+            let state = app_handle.state::<llm_runner::LlmState>();
+            llm_runner::kill_server_on_exit(&state);
+        }
+        _ => {}
+    });
 }

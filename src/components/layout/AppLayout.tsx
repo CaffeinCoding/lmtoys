@@ -3,10 +3,45 @@ import { FileText, Database, Settings as SettingsIcon, Moon, Sun, Monitor } from
 import { useTheme } from "../theme-provider";
 import { Button } from "../ui/button";
 import { GlobalStatusBar } from "../GlobalStatusBar";
+import { Header } from "./Header";
+import { useEffect } from "react";
+import { useAppStore } from "@/store/useAppStore";
 
 export default function AppLayout() {
   const { pathname } = useLocation();
   const { theme, setTheme } = useTheme();
+  
+  const { setModelDownloadPath, setHfToken, setServerPort, setSelectedRuntime } = useAppStore();
+
+  useEffect(() => {
+    async function initGlobalSettings() {
+      try {
+        const { load } = await import("@tauri-apps/plugin-store");
+        const store = await load("settings.json");
+        
+        const hf = await store.get<string>("hfToken");
+        if (hf) setHfToken(hf);
+
+        const port = await store.get<number>("serverPort");
+        if (port) setServerPort(port);
+        
+        const runtime = await store.get<string>("selectedRuntime");
+        if (runtime) setSelectedRuntime(runtime as any);
+
+        const downloadPath = await store.get<string>("modelDownloadPath");
+        if (downloadPath) {
+          setModelDownloadPath(downloadPath);
+        } else {
+          const { appDataDir } = await import("@tauri-apps/api/path");
+          const defaultPath = await appDataDir();
+          setModelDownloadPath(`${defaultPath}\\models`);
+        }
+      } catch (err) {
+        console.error("Failed to load global settings", err);
+      }
+    }
+    initGlobalSettings();
+  }, [setModelDownloadPath, setHfToken, setServerPort, setSelectedRuntime]);
 
   const navItems = [
     { name: "Home", path: "/", icon: <FileText size={20} /> },
@@ -61,10 +96,13 @@ export default function AppLayout() {
         </aside>
 
         {/* Main Content — overflow-auto here so content scrolls, not the whole page */}
-        <main className="flex-1 overflow-auto relative">
-          <div className="absolute inset-0 bg-linear-to-br from-background to-muted/20 -z-10" />
-          <Outlet />
-        </main>
+        <div className="flex-1 flex flex-col min-w-0">
+          <Header />
+          <main className="flex-1 overflow-auto relative">
+            <div className="absolute inset-0 bg-linear-to-br from-background to-muted/20 -z-10" />
+            <Outlet />
+          </main>
+        </div>
       </div>
 
       {/* Global Status Bar — always at the very bottom, never overlaps content */}

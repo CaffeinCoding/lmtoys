@@ -24,7 +24,7 @@ export default function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
 
-  const { modelDownloadPath, setModelDownloadPath, hfToken, setHfToken, selectedRuntime, setSelectedRuntime } = useAppStore();
+  const { modelDownloadPath, setModelDownloadPath, hfToken, setHfToken, selectedRuntime, setSelectedRuntime, serverPort, setServerPort } = useAppStore();
   const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<{ [key: string]: number }>({});
   const [isDownloading, setIsDownloading] = useState<{ [key: string]: boolean }>({});
@@ -98,6 +98,11 @@ export default function Settings() {
           setHfToken(hf);
           setLocalHfToken(hf);
         }
+
+        const port = await store.get<number>("serverPort");
+        if (port) {
+          setServerPort(port);
+        }
         
         const downloadPath = await store.get<string>("modelDownloadPath");
         if (downloadPath) {
@@ -162,6 +167,8 @@ export default function Settings() {
       await store.set("ollamaUrl", ollamaUrl);
       await store.set("lmStudioUrl", lmStudioUrl);
       await store.set("hfToken", localHfToken);
+      await store.set("serverPort", serverPort);
+      await store.set("selectedRuntime", selectedRuntime);
       setHfToken(localHfToken);
       if (modelDownloadPath) await store.set("modelDownloadPath", modelDownloadPath);
       await store.save();
@@ -289,29 +296,33 @@ export default function Settings() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="space-y-2">
-                <Label>GPU Runtime</Label>
-                <div className="flex gap-2 items-center">
-                  <select 
-                    value={selectedRuntime}
-                    onChange={(e) => setSelectedRuntime(e.target.value as any)}
-                    className="flex h-10 w-full md:w-64 items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
-                  >
-                    {supportedRuntimes.map((rt) => (
-                      <option key={rt} value={rt}>
-                        {{ cpu: "CPU Only (Default)", vulkan: "Vulkan (AMD/Intel/NVIDIA)", cuda: "CUDA (NVIDIA)", cuda12: "CUDA 12 (NVIDIA)" }[rt] ?? rt}
-                      </option>
-                    ))}
-                  </select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>GPU Runtime</Label>
+                  <div className="flex gap-2 items-center">
+                    <select 
+                      value={selectedRuntime}
+                      onChange={(e) => setSelectedRuntime(e.target.value as any)}
+                      className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+                    >
+                      {supportedRuntimes.map((rt) => (
+                        <option key={rt} value={rt}>
+                          {{ cpu: "CPU Only (Default)", vulkan: "Vulkan (AMD/Intel/NVIDIA)", cuda: "CUDA (NVIDIA)", cuda12: "CUDA 12 (NVIDIA)" }[rt] ?? rt}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                {supportedRuntimes.length === 1 && (
-                  <p className="text-xs text-amber-500 max-w-[600px] mt-1">
-                    ⚠️ 현재 바이너리에는 <strong>CPU Only</strong> 모드만 컴파일되어 있습니다. GPU 가속을 활성화하려면
-                    <code className="mx-1 px-1 bg-muted rounded text-[10px]">cargo build --features vulkan</code> 또는
-                    <code className="mx-1 px-1 bg-muted rounded text-[10px]">cargo build --features cuda</code>로
-                    재빌드하세요.
-                  </p>
-                )}
+                <div className="space-y-2">
+                  <Label htmlFor="serverPort">Local Server Port</Label>
+                  <Input 
+                    id="serverPort" 
+                    type="number"
+                    placeholder="8080" 
+                    value={serverPort}
+                    onChange={(e) => setServerPort(Number(e.target.value))}
+                  />
+                </div>
               </div>
 
               <div className="space-y-2">
