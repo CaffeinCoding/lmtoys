@@ -11,14 +11,43 @@ export default function AppLayout() {
   const { pathname } = useLocation();
   const { theme, setTheme } = useTheme();
   
-  const { setModelDownloadPath, setHfToken, setServerPort, setSelectedRuntime } = useAppStore();
+  const { 
+    setModelDownloadPath, 
+    setHfToken, 
+    setServerPort, 
+    setSelectedRuntime, 
+    setExtractionHistory,
+    setLlmMode,
+    setCloudProvider,
+    setProvider,
+    setBuiltInModel,
+    setModelName,
+    setTemperature,
+    setMaxTokens,
+    setTopP,
+    setTopK,
+    setRepeatPenalty,
+    setNGpuLayers,
+    setSystemPrompt,
+    setPromptText,
+    setIsInitializing,
+    setExtractionMode
+  } = useAppStore();
 
   useEffect(() => {
     async function initGlobalSettings() {
+      setIsInitializing(true);
       try {
         const { load } = await import("@tauri-apps/plugin-store");
         const store = await load("settings.json");
         
+        // 1. Load basic settings
+        const llm_mode = await store.get<string>("llmMode");
+        if (llm_mode) setLlmMode(llm_mode as any);
+
+        const extMode = await store.get<string>("extractionMode");
+        if (extMode) setExtractionMode(extMode as any);
+
         const hf = await store.get<string>("hfToken");
         if (hf) setHfToken(hf);
 
@@ -28,9 +57,70 @@ export default function AppLayout() {
         const runtime = await store.get<string>("selectedRuntime");
         if (runtime) setSelectedRuntime(runtime as any);
 
+        const mode = await store.get<string>("llmMode");
+        if (mode) setLlmMode(mode as any);
+
+        const cProv = await store.get<string>("cloudProvider");
+        if (cProv) setCloudProvider(cProv as any);
+
+        const prov = await store.get<string>("provider");
+        if (prov) setProvider(prov as any);
+
+        const bModel = await store.get<any>("builtInModel");
+        if (bModel) {
+          const sanitizedModel = typeof bModel === 'string' ? bModel : bModel.name;
+          if (sanitizedModel) setBuiltInModel(sanitizedModel);
+        }
+
+        const mName = await store.get<string>("modelName");
+        if (mName) setModelName(mName);
+
+        const history = await store.get<any[]>("extractionHistory");
+        if (history) setExtractionHistory(history);
+
+        // 2. Load Parameters
+        const temp = await store.get<number>("temperature");
+        if (temp !== undefined && temp !== null) setTemperature(temp);
+        const tokens = await store.get<number>("maxTokens");
+        if (tokens !== undefined && tokens !== null) setMaxTokens(tokens);
+        const p = await store.get<number>("topP");
+        if (p !== undefined && p !== null) setTopP(p);
+        const k = await store.get<number>("topK");
+        if (k !== undefined && k !== null) setTopK(k);
+        const rep = await store.get<number>("repeatPenalty");
+        if (rep !== undefined && rep !== null) setRepeatPenalty(rep);
+        const ngl = await store.get<number>("nGpuLayers");
+        if (ngl !== undefined && ngl !== null) setNGpuLayers(ngl);
+        const sys = await store.get<string>("systemPrompt");
+        if (sys) setSystemPrompt(sys);
+        const prompt = await store.get<string>("promptText");
+        if (prompt) setPromptText(prompt);
+
         const downloadPath = await store.get<string>("modelDownloadPath");
         if (downloadPath) {
           setModelDownloadPath(downloadPath);
+          
+          // 3. If built-in model is selected, try to load its specific settings to override
+          if (bModel && mode === "local" && prov === "builtin") {
+            try {
+              const { readTextFile, exists } = await import("@tauri-apps/plugin-fs");
+              const settingPath = `${downloadPath}\\${bModel}_setting.json`;
+              if (await exists(settingPath)) {
+                const content = await readTextFile(settingPath);
+                const settings = JSON.parse(content);
+                if (settings.temperature !== undefined) setTemperature(settings.temperature);
+                if (settings.maxTokens !== undefined) setMaxTokens(settings.maxTokens);
+                if (settings.topP !== undefined) setTopP(settings.topP);
+                if (settings.topK !== undefined) setTopK(settings.topK);
+                if (settings.repeatPenalty !== undefined) setRepeatPenalty(settings.repeatPenalty);
+                if (settings.nGpuLayers !== undefined) setNGpuLayers(settings.nGpuLayers);
+                if (settings.systemPrompt !== undefined) setSystemPrompt(settings.systemPrompt);
+                if (settings.promptText !== undefined) setPromptText(settings.promptText);
+              }
+            } catch (e) {
+              console.error("Failed to load model-specific settings during init", e);
+            }
+          }
         } else {
           const { appDataDir } = await import("@tauri-apps/api/path");
           const defaultPath = await appDataDir();
@@ -38,10 +128,12 @@ export default function AppLayout() {
         }
       } catch (err) {
         console.error("Failed to load global settings", err);
+      } finally {
+        setIsInitializing(false);
       }
     }
     initGlobalSettings();
-  }, [setModelDownloadPath, setHfToken, setServerPort, setSelectedRuntime]);
+  }, [setModelDownloadPath, setHfToken, setServerPort, setSelectedRuntime, setIsInitializing]);
 
   const navItems = [
     { name: "Home", path: "/", icon: <FileText size={20} /> },

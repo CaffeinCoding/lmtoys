@@ -5,19 +5,25 @@ import { listen } from "@tauri-apps/api/event";
 import { appDataDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "@/store/useAppStore";
-import { Download, Trash2, FolderOpen } from "lucide-react";
+import { Download, Trash2, FolderOpen, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
+
+interface ModelInfo {
+  name: string;
+  repo: string;
+  has_vision: boolean;
+}
 
 export default function Settings() {
   const [geminiKey, setGeminiKey] = useState("");
   const [openAiKey, setOpenAiKey] = useState("");
   const [claudeKey, setClaudeKey] = useState("");
-  
   const [ollamaUrl, setOllamaUrl] = useState("http://localhost:11434");
   const [lmStudioUrl, setLmStudioUrl] = useState("http://localhost:1234/v1");
 
@@ -25,7 +31,7 @@ export default function Settings() {
   const [saveMessage, setSaveMessage] = useState("");
 
   const { modelDownloadPath, setModelDownloadPath, hfToken, setHfToken, selectedRuntime, setSelectedRuntime, serverPort, setServerPort } = useAppStore();
-  const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
+  const [downloadedModels, setDownloadedModels] = useState<ModelInfo[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<{ [key: string]: number }>({});
   const [isDownloading, setIsDownloading] = useState<{ [key: string]: boolean }>({});
   const [localHfToken, setLocalHfToken] = useState("");
@@ -47,9 +53,23 @@ export default function Settings() {
     setIsSearching(true);
     setSelectedModelId(null);
     try {
-      const res = await fetch(`https://huggingface.co/api/models?search=${encodeURIComponent(searchQuery)}&filter=gguf&sort=downloads&direction=-1&limit=20`);
+      const res = await fetch(`https://huggingface.co/api/models?search=${encodeURIComponent(searchQuery)}&filter=gguf&sort=downloads&direction=-1&limit=20&full=true`);
       const data = await res.json();
-      setSearchResults(data);
+      
+      // Process data to flag vision support early based on tags or library names
+      const processedResults = data.map((model: any) => {
+        const tags = model.tags || [];
+        const hasVisionTag = tags.some((t: string) => 
+          t.toLowerCase().includes('vision') || 
+          t.toLowerCase().includes('multimodal') || 
+          t.toLowerCase().includes('llava') ||
+          t.toLowerCase().includes('moondream') ||
+          t.toLowerCase().includes('qwen2-vl')
+        );
+        return { ...model, has_vision_projector: hasVisionTag };
+      });
+      
+      setSearchResults(processedResults);
     } catch (err) {
       console.error("Failed to search Hugging Face", err);
     } finally {
@@ -64,8 +84,16 @@ export default function Settings() {
       const headers: Record<string, string> = hfToken ? { "Authorization": `Bearer ${hfToken}` } : {};
       const res = await fetch(`https://huggingface.co/api/models/${modelId}`, { headers });
       const data = await res.json();
-      const files = data.siblings?.filter((s: any) => s.rfilename.endsWith('.gguf')) || [];
-      setModelFiles(files);
+      const allFiles = data.siblings || [];
+      const ggufFiles = allFiles.filter((s: any) => s.rfilename.endsWith('.gguf'));
+      
+      // Determine if this repo likely contains a vision model by checking for mmproj files
+      const hasVisionProjector = allFiles.some((s: any) => s.rfilename.toLowerCase().includes('mmproj'));
+      
+      // Update search results to include this info if not already there
+      setSearchResults(prev => prev.map(m => m.id === modelId ? { ...m, has_vision_projector: hasVisionProjector } : m));
+      
+      setModelFiles(ggufFiles);
     } catch (err) {
       console.error("Failed to fetch model files", err);
     } finally {
@@ -107,13 +135,11 @@ export default function Settings() {
         const downloadPath = await store.get<string>("modelDownloadPath");
         if (downloadPath) {
           setModelDownloadPath(downloadPath);
+          refreshDownloadedModels(downloadPath);
         } else {
-          try {
-            const defaultPath = await appDataDir();
-            setModelDownloadPath(`${defaultPath}\\models`);
-          } catch (e) {
-            console.error("Failed to get appDataDir", e);
-          }
+          const path = await appDataDir();
+          setModelDownloadPath(`${path}\\models`);
+          refreshDownloadedModels(`${path}\\models`);
         }
       } catch (err) {
         console.error("Failed to load settings", err);
@@ -124,7 +150,7 @@ export default function Settings() {
 
   const refreshDownloadedModels = async (path: string) => {
     try {
-      const models = await invoke<string[]>("get_downloaded_models", { path });
+      const models = await invoke<ModelInfo[]>("get_downloaded_models", { path });
       setDownloadedModels(models);
     } catch (err) {
       console.error("Failed to fetch downloaded models", err);
@@ -132,25 +158,17 @@ export default function Settings() {
   };
 
   useEffect(() => {
-    if (modelDownloadPath) {
-      refreshDownloadedModels(modelDownloadPath);
-    }
-  }, [modelDownloadPath]);
-
-  useEffect(() => {
-    const unlisten = listen<{ filename: string, downloaded: number, total: number | null }>("download_progress", (event) => {
+    const unlisten = listen<{ filename: string, downloaded: number, total: number }>("download_progress", (event) => {
       const { filename, downloaded, total } = event.payload;
-      if (total) {
-        const percent = Math.round((downloaded / total) * 100);
-        setDownloadProgress(prev => ({ ...prev, [filename]: percent }));
-        if (percent >= 100) {
-           setTimeout(() => {
-             setIsDownloading(prev => ({ ...prev, [filename]: false }));
-             if (modelDownloadPath) refreshDownloadedModels(modelDownloadPath);
-           }, 1000);
-        }
+      const progress = Math.round((downloaded / total) * 100);
+      setDownloadProgress(prev => ({ ...prev, [filename]: progress }));
+      
+      if (progress >= 100) {
+        setIsDownloading(prev => ({ ...prev, [filename]: false }));
+        if (modelDownloadPath) refreshDownloadedModels(modelDownloadPath);
       }
     });
+
     return () => {
       unlisten.then(f => f());
     };
@@ -179,6 +197,22 @@ export default function Settings() {
     } finally {
       setIsSaving(false);
       setTimeout(() => setSaveMessage(""), 3000);
+    }
+  };
+
+  const handleSelectDownloadDir = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: modelDownloadPath || undefined
+      });
+      if (selected && typeof selected === 'string') {
+        setModelDownloadPath(selected);
+        refreshDownloadedModels(selected);
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -290,7 +324,7 @@ export default function Settings() {
 
           <Card className="mt-6">
             <CardHeader>
-              <CardTitle>Built-in Models (Candle)</CardTitle>
+              <CardTitle>Built-in Models (llama-server)</CardTitle>
               <CardDescription>
                 Download and manage models directly within the application.
               </CardDescription>
@@ -328,17 +362,8 @@ export default function Settings() {
               <div className="space-y-2">
                 <Label>Download Directory</Label>
                 <div className="flex gap-2">
-                  <Input 
-                    readOnly
-                    placeholder="Select a folder..." 
-                    value={modelDownloadPath || ""}
-                  />
-                  <Button variant="outline" onClick={async () => {
-                    const selected = await open({ directory: true });
-                    if (selected && typeof selected === 'string') {
-                      setModelDownloadPath(selected);
-                    }
-                  }}>
+                  <Input readOnly value={modelDownloadPath || ""} placeholder="Select a folder..." />
+                  <Button variant="outline" onClick={handleSelectDownloadDir}>
                     <FolderOpen className="w-4 h-4 mr-2" /> Browse
                   </Button>
                 </div>
@@ -368,8 +393,19 @@ export default function Settings() {
                             className="flex items-center justify-between p-3 border rounded-md hover:bg-muted/50 cursor-pointer"
                             onClick={() => handleSelectModel(model.id)}
                           >
-                            <span className="text-sm font-medium">{model.id}</span>
-                            <span className="text-xs text-muted-foreground">{model.downloads?.toLocaleString()} downloads</span>
+                            <div className="flex items-center gap-2 truncate mr-4">
+                              <span className="text-sm font-medium truncate">{model.id}</span>
+                              {(
+                                model.has_vision_projector || 
+                                model.id.toLowerCase().includes('vision') || 
+                                model.id.toLowerCase().includes('llava') || 
+                                model.id.toLowerCase().includes('qwen-vl') ||
+                                model.tags?.some((t: string) => t.toLowerCase().includes('vision') || t.toLowerCase().includes('multimodal'))
+                              ) && (
+                                <Eye className="w-3.5 h-3.5 text-blue-500" />
+                              )}
+                            </div>
+                            <span className="text-xs text-muted-foreground shrink-0">{model.downloads?.toLocaleString()} downloads</span>
                           </div>
                         ))}
                       </div>
@@ -388,41 +424,46 @@ export default function Settings() {
                           <div className="text-sm text-muted-foreground">Loading files...</div>
                         ) : (
                           <div className="space-y-2 max-h-60 overflow-y-auto">
-                            {modelFiles.map(file => (
-                              <div key={file.rfilename} className="flex items-center justify-between p-2 border rounded-md bg-background">
-                                <span className="text-sm truncate mr-4" title={file.rfilename}>{file.rfilename}</span>
-                                <div className="flex items-center gap-4 shrink-0">
-                                  {downloadProgress[file.rfilename] !== undefined && isDownloading[file.rfilename] && (
-                                    <span className="text-xs text-muted-foreground">{downloadProgress[file.rfilename]}%</span>
-                                  )}
-                                  <Button 
-                                    size="sm" 
-                                    variant="secondary" 
-                                    disabled={isDownloading[file.rfilename] || downloadedModels.includes(file.rfilename)}
-                                    onClick={async () => {
-                                      setIsDownloading(prev => ({ ...prev, [file.rfilename]: true }));
-                                      setDownloadProgress(prev => ({ ...prev, [file.rfilename]: 0 }));
-                                      try {
-                                        const url = `https://huggingface.co/${selectedModelId}/resolve/main/${file.rfilename}?download=true`;
-                                        await invoke("download_model", { 
-                                          url, 
-                                          path: modelDownloadPath, 
-                                          filename: file.rfilename,
-                                          token: hfToken
-                                        });
-
-                                      } catch (err) {
-                                        console.error(err);
-                                        setIsDownloading(prev => ({ ...prev, [file.rfilename]: false }));
-                                      }
-                                    }}
-                                  >
-                                    <Download className="w-4 h-4 mr-2" /> 
-                                    {downloadedModels.includes(file.rfilename) ? "Downloaded" : "Download"}
-                                  </Button>
-                                </div>
-                              </div>
-                            ))}
+                            {modelFiles.map(file => {
+                                const fileName = file.rfilename;
+                                const isDownloaded = downloadedModels.some(m => m.name.endsWith(fileName));
+                                return (
+                                    <div key={fileName} className="flex items-center justify-between p-2 border rounded-md bg-background">
+                                        <span className="text-sm truncate mr-4" title={fileName}>{fileName}</span>
+                                        <div className="flex items-center gap-4 shrink-0">
+                                            {downloadProgress[fileName] !== undefined && isDownloading[fileName] && (
+                                                <span className="text-xs text-muted-foreground">{downloadProgress[fileName]}%</span>
+                                            )}
+                                            <Button 
+                                                size="sm" 
+                                                variant="secondary" 
+                                                disabled={isDownloading[fileName] || isDownloaded}
+                                                onClick={async () => {
+                                                    setIsDownloading(prev => ({ ...prev, [fileName]: true }));
+                                                    setDownloadProgress(prev => ({ ...prev, [fileName]: 0 }));
+                                                    try {
+                                                        const url = `https://huggingface.co/${selectedModelId}/resolve/main/${fileName}?download=true`;
+                                                        await invoke("download_model", { 
+                                                            url, 
+                                                            path: modelDownloadPath, 
+                                                            filename: fileName,
+                                                            repo: selectedModelId,
+                                                            token: hfToken
+                                                        });
+                                                        const { emit } = await import("@tauri-apps/api/event");
+                                                        await emit("models-changed");
+                                                        } catch (err) {                                                        console.error(err);
+                                                        setIsDownloading(prev => ({ ...prev, [fileName]: false }));
+                                                    }
+                                                }}
+                                            >
+                                                <Download className="w-4 h-4 mr-2" /> 
+                                                {isDownloaded ? "Downloaded" : "Download"}
+                                            </Button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
                             {modelFiles.length === 0 && <div className="text-sm text-muted-foreground">No GGUF files found in this repository.</div>}
                           </div>
                         )}
@@ -434,18 +475,28 @@ export default function Settings() {
                     <Label>Downloaded Models</Label>
                     {downloadedModels.length > 0 ? (
                       <div className="space-y-2">
-                        {downloadedModels.map(name => (
-                          <div key={name} className="flex flex-col gap-2 p-3 border rounded-md bg-muted/20">
+                        {downloadedModels.map(model => (
+                          <div key={model.name} className="flex flex-col gap-2 p-3 border rounded-md bg-muted/20">
                             <div className="flex items-center justify-between">
-                              <span className="text-sm truncate mr-4" title={name}>{name}</span>
+                              <div className="flex items-center gap-2 truncate mr-4">
+                                <span className="text-sm truncate font-medium" title={model.name}>{model.name}</span>
+                                {model.has_vision && (
+                                  <Badge variant="secondary" className="h-5 px-1.5 gap-1 bg-blue-500/10 text-blue-600 border-blue-200 shrink-0">
+                                    <Eye className="w-3 h-3" />
+                                    <span className="text-[10px]">VISION</span>
+                                  </Badge>
+                                )}
+                              </div>
                               <div className="flex items-center gap-2 shrink-0">
                                 <Button 
                                   size="sm" 
                                   variant="destructive" 
                                   onClick={async () => {
                                     try {
-                                      await invoke("delete_model", { path: modelDownloadPath, filename: name });
-                                      refreshDownloadedModels(modelDownloadPath!);
+                                      await invoke("delete_model", { path: modelDownloadPath, filename: model.name });
+                                      if (modelDownloadPath) refreshDownloadedModels(modelDownloadPath);
+                                      const { emit } = await import("@tauri-apps/api/event");
+                                      await emit("models-changed");
                                     } catch (err) {
                                       console.error("Failed to delete", err);
                                     }
@@ -471,8 +522,8 @@ export default function Settings() {
         </TabsContent>
       </Tabs>
 
-      <div className="flex items-center gap-4">
-        <Button onClick={saveSettings} disabled={isSaving}>
+      <div className="flex items-center justify-end gap-4 border-t pt-6">
+        <Button variant="default" onClick={saveSettings} disabled={isSaving}>
           {isSaving ? "Saving..." : "Save Settings"}
         </Button>
         {saveMessage && (

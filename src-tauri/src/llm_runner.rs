@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State, Manager};
 use std::io::{BufReader, BufRead};
 use std::thread;
+use std::path::Path;
 
 pub struct LlmState {
     pub process: Mutex<Option<Child>>,
@@ -24,6 +25,25 @@ impl LlmState {
 struct LlmEvent {
     status: String,
     message: String,
+}
+
+fn add_mmproj_if_exists(cmd: &mut Command, model_path_str: &str) {
+    let model_path = Path::new(model_path_str);
+    if let Some(parent) = model_path.parent() {
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    let file_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+                    if file_name.contains("mmproj") {
+                        tracing::info!("Vision projector detected: {:?}", p);
+                        cmd.arg("--mmproj").arg(p.to_string_lossy().to_string());
+                        return; // Use the first matching file
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -70,6 +90,8 @@ pub async fn start_llama_server(
                .arg("-ngl").arg(ngl.to_string())
                .stdout(Stdio::piped())
                .stderr(Stdio::piped());
+            
+            add_mmproj_if_exists(&mut cmd, &model);
 
             #[cfg(windows)]
             {
@@ -92,6 +114,8 @@ pub async fn start_llama_server(
                    .arg("-ngl").arg(ngl.to_string())
                    .stdout(Stdio::piped())
                    .stderr(Stdio::piped());
+
+                add_mmproj_if_exists(&mut cmd, &model);
 
                 #[cfg(windows)]
                 {
@@ -117,6 +141,8 @@ pub async fn start_llama_server(
        .arg("-ngl").arg(ngl.to_string())
        .stdout(Stdio::piped())
        .stderr(Stdio::piped());
+
+    add_mmproj_if_exists(&mut cmd, &model);
 
     #[cfg(windows)]
     {

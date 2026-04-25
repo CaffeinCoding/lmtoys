@@ -75,8 +75,8 @@ export function GlobalStatusBar() {
         {/* Model Info if running or loading */}
         {serverStatus !== "offline" && builtInModel && (
           <div className="flex items-center gap-2">
-            <span className="truncate max-w-[200px]" title={builtInModel}>
-              {builtInModel} ({runtimeLabel[selectedRuntime] ?? selectedRuntime.toUpperCase()})
+            <span className="truncate max-w-[200px]" title={typeof builtInModel === 'string' ? builtInModel : (builtInModel as any).name}>
+              {typeof builtInModel === 'string' ? builtInModel : (builtInModel as any).name} ({runtimeLabel[selectedRuntime] ?? selectedRuntime.toUpperCase()})
             </span>
             <span className="opacity-50">|</span>
             <span>Port: {serverPort}</span>

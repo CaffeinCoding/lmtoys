@@ -1,5 +1,5 @@
 use sysinfo::System;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{Emitter, Manager};
 use futures_util::StreamExt;
 use std::fs::File;
@@ -70,23 +70,46 @@ fn get_system_vram() -> serde_json::Value {
 
 #[tauri::command]
 async fn extract_pdf_text(file_path: String) -> Result<String, String> {
-    let path = std::path::Path::new(&file_path);
+    let path = Path::new(&file_path);
     if !path.exists() {
-        return Err("File does not exist".into());
+        return Err(format!("File not found: {}", file_path));
     }
 
     match pdf_extract::extract_text(path) {
-        Ok(text) => Ok(text),
+        Ok(text) => {
+            if text.trim().is_empty() {
+                Err("No text could be extracted from this PDF.".into())
+            } else {
+                Ok(text)
+            }
+        },
         Err(e) => Err(format!("Failed to extract text: {:?}", e)),
     }
 }
 
 #[tauri::command]
-async fn download_model(url: String, path: String, filename: String, token: Option<String>, app: tauri::AppHandle) -> Result<(), String> {
-    let mut dest_path = PathBuf::from(&path);
-    if !dest_path.exists() {
-        std::fs::create_dir_all(&dest_path).map_err(|e| e.to_string())?;
+async fn download_model(
+    url: String, 
+    path: String, 
+    filename: String, 
+    repo: String, // e.g. "unsloth/gemma-4-E2B-it-GGUF"
+    token: Option<String>, 
+    app: tauri::AppHandle
+) -> Result<(), String> {
+    // Split "owner/repo" to create folder structure
+    let parts: Vec<&str> = repo.split('/').collect();
+    let owner = parts.get(0).unwrap_or(&"unknown");
+    let repo_name = parts.get(1).unwrap_or(&"model");
+    
+    let mut dest_dir = PathBuf::from(&path);
+    dest_dir.push(owner);
+    dest_dir.push(repo_name);
+    
+    if !dest_dir.exists() {
+        std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
     }
+    
+    let mut dest_path = dest_dir.clone();
     dest_path.push(&filename);
     
     let client = reqwest::Client::new();
@@ -112,7 +135,6 @@ async fn download_model(url: String, path: String, filename: String, token: Opti
         file.write_all(&chunk).map_err(|e| e.to_string())?;
         downloaded += chunk.len() as u64;
         
-        // Emit progress at most once per 100ms to avoid overwhelming the frontend
         if last_emit.elapsed().as_millis() > 100 {
             let _ = app.emit("download_progress", DownloadProgress {
                 filename: filename.clone(),
@@ -123,7 +145,6 @@ async fn download_model(url: String, path: String, filename: String, token: Opti
         }
     }
     
-    // Final emit
     let _ = app.emit("download_progress", DownloadProgress {
         filename: filename.clone(),
         downloaded,
@@ -133,20 +154,53 @@ async fn download_model(url: String, path: String, filename: String, token: Opti
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct ModelInfo {
+    name: String,
+    repo: String,
+    has_vision: bool,
+}
+
 #[tauri::command]
-fn get_downloaded_models(path: String) -> Result<Vec<String>, String> {
+fn get_downloaded_models(path: String) -> Result<Vec<ModelInfo>, String> {
     let mut models = Vec::new();
-    let dir = std::path::Path::new(&path);
-    if dir.exists() && dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if path.is_file() {
-                        if let Some(ext) = path.extension() {
-                            if ext == "gguf" || ext == "bin" {
-                                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                                    models.push(name.to_string());
+    let root_dir = Path::new(&path);
+    
+    if !root_dir.exists() || !root_dir.is_dir() {
+        return Ok(models);
+    }
+
+    fn scan_dir(current_dir: &Path, root_dir: &Path, models: &mut Vec<ModelInfo>) {
+        if let Ok(entries) = std::fs::read_dir(current_dir) {
+            let entries_vec: Vec<_> = entries.flatten().collect();
+            
+            // Check if any file in THIS folder contains "mmproj" in its name
+            let has_vision = entries_vec.iter().any(|e| {
+                e.file_name().to_string_lossy().to_lowercase().contains("mmproj")
+            });
+
+            for entry in entries_vec {
+                let p = entry.path();
+                if p.is_dir() {
+                    scan_dir(&p, root_dir, models);
+                } else if p.is_file() {
+                    if let Some(ext) = p.extension() {
+                        let ext_str = ext.to_string_lossy().to_lowercase();
+                        if ext_str == "gguf" || ext_str == "bin" {
+                            let file_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                            // Main model should NOT be an mmproj file
+                            if !file_name.to_lowercase().contains("mmproj") {
+                                if let Ok(rel_path) = p.strip_prefix(root_dir) {
+                                    let rel_path_str = rel_path.to_string_lossy().replace('\\', "/");
+                                    let repo = rel_path.parent()
+                                        .map(|parent| parent.to_string_lossy().replace('\\', "/"))
+                                        .unwrap_or_default();
+
+                                    models.push(ModelInfo {
+                                        name: rel_path_str,
+                                        repo,
+                                        has_vision,
+                                    });
                                 }
                             }
                         }
@@ -155,23 +209,73 @@ fn get_downloaded_models(path: String) -> Result<Vec<String>, String> {
             }
         }
     }
+
+    scan_dir(root_dir, root_dir, &mut models);
     Ok(models)
 }
 
 #[tauri::command]
 fn delete_model(path: String, filename: String) -> Result<(), String> {
-    let mut dest_path = PathBuf::from(&path);
-    dest_path.push(&filename);
+    let root_path = PathBuf::from(&path);
+    let mut dest_path = root_path.clone();
+    dest_path.push(&filename); 
+    
     if dest_path.exists() {
+        // 1. Delete model file
         std::fs::remove_file(&dest_path).map_err(|e| e.to_string())?;
+        
+        // 2. Delete associated setting file
+        let mut setting_path = dest_path.clone();
+        let file_name_os = setting_path.file_name().unwrap().to_owned();
+        let file_name_str = file_name_os.to_string_lossy();
+        setting_path.set_file_name(format!("{}_setting.json", file_name_str));
+        
+        if setting_path.exists() {
+            let _ = std::fs::remove_file(&setting_path);
+        }
+        
+        // 3. Delete any associated mmproj files in the same folder
+        if let Some(parent) = dest_path.parent() {
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file() {
+                        let f_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+                        if f_name.contains("mmproj") {
+                            let _ = std::fs::remove_file(&p);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Recursively delete empty parent directories up to root
+        let mut current_dir = dest_path.parent();
+        while let Some(dir) = current_dir {
+            if dir == root_path || !dir.starts_with(&root_path) {
+                break;
+            }
+            
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                if entries.count() == 0 {
+                    let _ = std::fs::remove_dir(dir);
+                    current_dir = dir.parent();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
     }
+    
     Ok(())
 }
 
 #[tauri::command]
 fn get_all_files_in_dir(path: String) -> Result<Vec<String>, String> {
     let mut files = Vec::new();
-    let dir = std::path::Path::new(&path);
+    let dir = Path::new(&path);
     if dir.exists() && dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
