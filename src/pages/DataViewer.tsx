@@ -32,13 +32,41 @@ export default function DataViewer() {
 
   // Use either the most recent extracted data or the last item from history if none is active
   const displayData = useMemo(() => {
-    let data = [];
+    let rawData: any = [];
     if (extractedData && extractedData.length > 0) {
-      data = extractedData;
+      rawData = extractedData;
     } else if (extractionHistory.length > 0) {
-      data = extractionHistory[0].data;
+      rawData = extractionHistory[0].data;
     }
-    return Array.isArray(data) ? data : [data];
+
+    const data = Array.isArray(rawData) ? rawData : [rawData];
+    
+    // Check if we have a single object that should be exploded into multiple rows
+    // e.g. {"name": ["1", "2"], "age": [20, 30]} -> [{"name": "1", "age": 20}, {"name": "2", "age": 30}]
+    if (data.length === 1 && typeof data[0] === 'object' && data[0] !== null) {
+      const obj = data[0];
+      const keys = Object.keys(obj);
+      const arrayKeys = keys.filter(k => Array.isArray(obj[k]));
+      
+      if (arrayKeys.length > 0) {
+        const lengths = arrayKeys.map(k => obj[k].length);
+        const allSameLength = lengths.every(l => l === lengths[0]);
+        
+        if (allSameLength && lengths[0] > 1) {
+          const exploded = [];
+          for (let i = 0; i < lengths[0]; i++) {
+            const row: any = {};
+            keys.forEach(k => {
+              row[k] = Array.isArray(obj[k]) ? obj[k][i] : obj[k];
+            });
+            exploded.push(row);
+          }
+          return exploded;
+        }
+      }
+    }
+
+    return data;
   }, [extractedData, extractionHistory]);
 
   const columnHelper = createColumnHelper<any>();

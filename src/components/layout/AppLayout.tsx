@@ -33,8 +33,30 @@ export default function AppLayout() {
     setPromptText,
     setIsInitializing,
     setExtractionMode,
-    setServerStatus
+    setServerStatus,
+    updateDownloadProgress,
+    setVisionResolution,
+    setMaxImages
   } = useAppStore();
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    
+    async function setupListener() {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen<{ filename: string, downloaded: number, total: number }>("download_progress", (event) => {
+        const { filename, downloaded, total } = event.payload;
+        const progress = total > 0 ? Math.round((downloaded / total) * 100) : 0;
+        updateDownloadProgress(filename, progress, progress >= 100 ? 'completed' : 'downloading');
+      });
+    }
+
+    setupListener();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [updateDownloadProgress]);
 
   useEffect(() => {
     async function initGlobalSettings() {
@@ -62,6 +84,12 @@ export default function AppLayout() {
 
         const extMode = await store.get<string>("extractionMode");
         if (extMode) setExtractionMode(extMode as any);
+
+        const vRes = await store.get<number>("visionResolution");
+        if (vRes) setVisionResolution(vRes);
+
+        const mImg = await store.get<number>("maxImages");
+        if (mImg) setMaxImages(mImg);
 
         const hf = await store.get<string>("hfToken");
         if (hf) setHfToken(hf);

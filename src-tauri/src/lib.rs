@@ -1,9 +1,12 @@
 use sysinfo::System;
 use std::path::{Path, PathBuf};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, State};
 use futures_util::StreamExt;
 use std::fs::File;
 use std::io::Write;
+use std::sync::Mutex;
+use std::collections::HashMap;
+use futures_util::future::{AbortHandle, Abortable};
 
 mod llm_runner;
 
@@ -14,6 +17,18 @@ struct DownloadProgress {
     total: Option<u64>,
 }
 
+pub struct DownloadState {
+    pub handles: Mutex<HashMap<String, AbortHandle>>,
+}
+
+impl DownloadState {
+    pub fn new() -> Self {
+        Self {
+            handles: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -21,7 +36,6 @@ fn greet(name: &str) -> String {
 }
 
 /// Returns a list of GPU runtimes supported by this binary build.
-/// In the 2-layer architecture, these rely on bundled `llama-server` executables.
 #[tauri::command]
 fn get_supported_runtimes() -> Vec<String> {
     vec![
@@ -43,8 +57,6 @@ fn get_system_memory() -> serde_json::Value {
 
 #[tauri::command]
 fn get_system_vram() -> serde_json::Value {
-    // Attempt to use nvidia-smi to get VRAM. 
-    // Returns { total: <bytes>, used: <bytes> } or null if not available.
     use std::process::Command;
     
     if let Ok(output) = Command::new("nvidia-smi")
@@ -88,15 +100,28 @@ async fn extract_pdf_text(file_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn cancel_download(
+    filename: String,
+    state: State<'_, DownloadState>
+) -> Result<(), String> {
+    let mut handles = state.handles.lock().unwrap();
+    if let Some(handle) = handles.remove(&filename) {
+        handle.abort();
+        tracing::info!("Aborted download for {}", filename);
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn download_model(
     url: String, 
     path: String, 
     filename: String, 
-    repo: String, // e.g. "unsloth/gemma-4-E2B-it-GGUF"
+    repo: String, 
     token: Option<String>, 
-    app: tauri::AppHandle
+    app: tauri::AppHandle,
+    state: State<'_, DownloadState>
 ) -> Result<(), String> {
-    // Split "owner/repo" to create folder structure
     let parts: Vec<&str> = repo.split('/').collect();
     let owner = parts.get(0).unwrap_or(&"unknown");
     let repo_name = parts.get(1).unwrap_or(&"model");
@@ -124,34 +149,67 @@ async fn download_model(
     let res = request.send().await.map_err(|e| e.to_string())?;
     let total_size = res.content_length();
     
-    let mut file = File::create(&dest_path).map_err(|e| e.to_string())?;
-    let mut downloaded: u64 = 0;
-    let mut stream = res.bytes_stream();
-    
-    let mut last_emit = std::time::Instant::now();
-    
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
-        file.write_all(&chunk).map_err(|e| e.to_string())?;
-        downloaded += chunk.len() as u64;
+    let (abort_handle, abort_registration) = AbortHandle::new_pair();
+    {
+        let mut handles = state.handles.lock().unwrap();
+        handles.insert(filename.clone(), abort_handle);
+    }
+
+    let dest_path_clone = dest_path.clone();
+    let filename_clone = filename.clone();
+    let app_clone = app.clone();
+
+    let download_task = async move {
+        let mut file = File::create(&dest_path_clone).map_err(|e| e.to_string())?;
+        let mut downloaded: u64 = 0;
+        let mut stream = res.bytes_stream();
         
-        if last_emit.elapsed().as_millis() > 100 {
-            let _ = app.emit("download_progress", DownloadProgress {
-                filename: filename.clone(),
-                downloaded,
-                total: total_size,
-            });
-            last_emit = std::time::Instant::now();
+        let mut last_emit = std::time::Instant::now();
+        
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| e.to_string())?;
+            file.write_all(&chunk).map_err(|e| e.to_string())?;
+            downloaded += chunk.len() as u64;
+            
+            if last_emit.elapsed().as_millis() > 100 {
+                let _ = app_clone.emit("download_progress", DownloadProgress {
+                    filename: filename_clone.clone(),
+                    downloaded,
+                    total: total_size,
+                });
+                last_emit = std::time::Instant::now();
+            }
+        }
+        
+        Ok::<(), String>(())
+    };
+
+    let result = Abortable::new(download_task, abort_registration).await;
+    
+    // Cleanup handle
+    {
+        let mut handles = state.handles.lock().unwrap();
+        handles.remove(&filename);
+    }
+
+    match result {
+        Ok(res) => {
+            if res.is_ok() {
+                let _ = app.emit("download_progress", DownloadProgress {
+                    filename: filename.clone(),
+                    downloaded: total_size.unwrap_or(0),
+                    total: total_size,
+                });
+            }
+            res
+        },
+        Err(_) => {
+            if dest_path.exists() {
+                let _ = std::fs::remove_file(&dest_path);
+            }
+            Err("Download cancelled by user".into())
         }
     }
-    
-    let _ = app.emit("download_progress", DownloadProgress {
-        filename: filename.clone(),
-        downloaded,
-        total: total_size,
-    });
-    
-    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -174,7 +232,6 @@ fn get_downloaded_models(path: String) -> Result<Vec<ModelInfo>, String> {
         if let Ok(entries) = std::fs::read_dir(current_dir) {
             let entries_vec: Vec<_> = entries.flatten().collect();
             
-            // Check if any file in THIS folder contains "mmproj" in its name
             let has_vision = entries_vec.iter().any(|e| {
                 e.file_name().to_string_lossy().to_lowercase().contains("mmproj")
             });
@@ -188,7 +245,6 @@ fn get_downloaded_models(path: String) -> Result<Vec<ModelInfo>, String> {
                         let ext_str = ext.to_string_lossy().to_lowercase();
                         if ext_str == "gguf" || ext_str == "bin" {
                             let file_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                            // Main model should NOT be an mmproj file
                             if !file_name.to_lowercase().contains("mmproj") {
                                 if let Ok(rel_path) = p.strip_prefix(root_dir) {
                                     let rel_path_str = rel_path.to_string_lossy().replace('\\', "/");
@@ -221,10 +277,8 @@ fn delete_model(path: String, filename: String) -> Result<(), String> {
     dest_path.push(&filename); 
     
     if dest_path.exists() {
-        // 1. Delete model file
         std::fs::remove_file(&dest_path).map_err(|e| e.to_string())?;
         
-        // 2. Delete associated setting file
         let mut setting_path = dest_path.clone();
         let file_name_os = setting_path.file_name().unwrap().to_owned();
         let file_name_str = file_name_os.to_string_lossy();
@@ -234,7 +288,6 @@ fn delete_model(path: String, filename: String) -> Result<(), String> {
             let _ = std::fs::remove_file(&setting_path);
         }
         
-        // 3. Delete any associated mmproj files in the same folder
         if let Some(parent) = dest_path.parent() {
             if let Ok(entries) = std::fs::read_dir(parent) {
                 for entry in entries.flatten() {
@@ -249,7 +302,6 @@ fn delete_model(path: String, filename: String) -> Result<(), String> {
             }
         }
 
-        // 4. Recursively delete empty parent directories up to root
         let mut current_dir = dest_path.parent();
         while let Some(dir) = current_dir {
             if dir == root_path || !dir.starts_with(&root_path) {
@@ -297,6 +349,7 @@ pub fn run() {
         .init();
 
     let llm_state = llm_runner::LlmState::new();
+    let download_state = DownloadState::new();
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
@@ -304,12 +357,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .manage(llm_state)
+        .manage(download_state)
         .invoke_handler(tauri::generate_handler![
             greet, 
             get_system_memory,
             get_system_vram,
             extract_pdf_text,
             download_model,
+            cancel_download,
             get_downloaded_models,
             delete_model,
             get_all_files_in_dir,

@@ -72,9 +72,13 @@ function extractJsonFromString(text: string): any[] | null {
         try {
             const cleaned = cleanJsonString(jsonStr);
             const parsed = JSON.parse(cleaned);
-            return Array.isArray(parsed) ? parsed : [parsed];
+            if (Array.isArray(parsed)) return parsed;
+            
+            // If it's a single object but contains arrays of the same length, 
+            // it might be an "exploded" table format. 
+            // But for now, just return as a single-item array.
+            return [parsed];
         } catch (e) {
-            // Try to fix common truncation issues by appending closing brackets
             try {
                 let fixed = cleanJsonString(jsonStr);
                 if (fixed.startsWith('[') && !fixed.endsWith(']')) fixed += ']';
@@ -87,36 +91,26 @@ function extractJsonFromString(text: string): any[] | null {
         }
     };
 
-    // 1. Try simple parse first (if it's pure JSON or in a single code block)
+    // 1. Try to find all JSON-like structures (objects or arrays)
+    // This handles cases where LLM outputs multiple objects not wrapped in an array
+    const results: any[] = [];
+    const regex = /(\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\})|(\[(?:[^[\]]|(?:\[(?:[^[\]]|(?:\[[^[\]]*\]))*\]))*\])/g;
+    let match;
+    
+    while ((match = regex.exec(text)) !== null) {
+        const jsonStr = match[0];
+        const parsed = tryParse(jsonStr);
+        if (parsed) {
+            results.push(...parsed);
+        }
+    }
+
+    if (results.length > 0) return results;
+
+    // 2. Fallback to the original markdown block extraction
     const markdownMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
     if (markdownMatch) {
         const result = tryParse(markdownMatch[1]);
-        if (result) return result;
-    }
-
-    // 2. Scan for largest array or object blocks
-    const arrayMatch = text.match(/\[[\s\S]*\]/);
-    if (arrayMatch) {
-        const result = tryParse(arrayMatch[0]);
-        if (result) return result;
-    }
-
-    const objectMatch = text.match(/\{[\s\S]*\}/);
-    if (objectMatch) {
-        const result = tryParse(objectMatch[0]);
-        if (result) return result;
-    }
-
-    // 3. Last resort: bracket-to-bracket extraction
-    const firstBracket = Math.min(
-        text.indexOf("[") === -1 ? Infinity : text.indexOf("["),
-        text.indexOf("{") === -1 ? Infinity : text.indexOf("{")
-    );
-    const lastBracket = Math.max(text.lastIndexOf("]"), text.lastIndexOf("}"));
-
-    if (firstBracket !== Infinity) {
-        const potentialJson = text.substring(firstBracket, lastBracket !== -1 ? lastBracket + 1 : text.length);
-        const result = tryParse(potentialJson);
         if (result) return result;
     }
 
@@ -372,6 +366,8 @@ export default function Home() {
                 const startTime = performance.now();
                 let firstTokenTime: number | null = null;
                 const port = useAppStore.getState().serverPort;
+                const visionResolution = useAppStore.getState().visionResolution;
+                const maxImages = useAppStore.getState().maxImages;
 
                 // Vision support detection
                 const currentModelInfo = downloadedModels.find(m => (typeof m === 'string' ? m : m.name) === builtInModel);
@@ -382,41 +378,50 @@ export default function Home() {
                 ];
 
                 if (extractionMode === "vision" && isVisionModel && currentPdfPath) {
-                    // Convert current PDF page to Image
+                    // Convert multiple PDF pages to Images
                     try {
                         const pdf = await pdfjs.getDocument(pdfFile!).promise;
-                        const page = await pdf.getPage(pageNumber);
-                        const viewport = page.getViewport({ scale: 2.0 }); // Higher scale for better OCR
-                        const canvas = document.createElement("canvas");
-                        const context = canvas.getContext("2d");
-                        canvas.height = viewport.height;
-                        canvas.width = viewport.width;
+                        const totalPages = pdf.numPages;
+                        const endPage = Math.min(pageNumber + maxImages - 1, totalPages);
 
-                        await page.render({ 
-                            canvasContext: context!, 
-                            viewport,
-                            // @ts-ignore
-                            canvas: canvas 
-                        }).promise;
-                        const imageData = canvas.toDataURL("image/jpeg", 0.8);
-                        
+                        const content: any[] = [{ type: "text", text: finalUserPrompt }];
+
+                        for (let i = pageNumber; i <= endPage; i++) {
+                            const page = await pdf.getPage(i);
+                            // Calculate scale to match visionResolution
+                            const initialViewport = page.getViewport({ scale: 1.0 });
+                            const scale = visionResolution / Math.max(initialViewport.width, initialViewport.height);
+                            const viewport = page.getViewport({ scale });
+
+                            const canvas = document.createElement("canvas");
+                            const context = canvas.getContext("2d");
+                            canvas.height = viewport.height;
+                            canvas.width = viewport.width;
+
+                            await page.render({ 
+                                canvasContext: context!, 
+                                viewport,
+                                // @ts-ignore
+                                canvas: canvas 
+                            }).promise;
+
+                            const imageData = canvas.toDataURL("image/jpeg", 0.8);
+                            content.push({ type: "image_url", image_url: { url: imageData } });
+                        }
+
                         messages.push({
                             role: "user",
-                            content: [
-                                { type: "text", text: finalUserPrompt },
-                                { type: "image_url", image_url: { url: imageData } }
-                            ]
+                            content
                         });
-                        console.log("Vision extraction: image attached.");
+                        console.log(`Vision extraction: ${endPage - pageNumber + 1} images attached at ${visionResolution}px.`);
                     } catch (e) {
-                        console.error("Failed to convert PDF page to image", e);
+                        console.error("Failed to convert PDF pages to images", e);
                         // Fallback to text only
                         messages.push({ role: "user", content: finalUserPrompt });
                     }
                 } else {
                     messages.push({ role: "user", content: finalUserPrompt });
                 }
-
                 response = await fetch(
                     `http://127.0.0.1:${port}/v1/chat/completions`,
                     {

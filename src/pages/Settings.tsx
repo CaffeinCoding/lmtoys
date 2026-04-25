@@ -5,10 +5,11 @@ import { listen } from "@tauri-apps/api/event";
 import { appDataDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "@/store/useAppStore";
-import { Download, Trash2, FolderOpen, Eye } from "lucide-react";
+import { Download, Trash2, FolderOpen, Eye, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -35,7 +36,15 @@ export default function Settings() {
     hfToken, setHfToken, 
     selectedRuntime, setSelectedRuntime, 
     serverPort, setServerPort,
-    updateDownloadProgress
+    updateDownloadProgress,
+    temperature, setTemperature,
+    maxTokens, setMaxTokens,
+    topP, setTopP,
+    topK, setTopK,
+    systemPrompt, setSystemPrompt,
+    promptText, setPromptText,
+    visionResolution, setVisionResolution,
+    maxImages, setMaxImages
   } = useAppStore();
   const [downloadedModels, setDownloadedModels] = useState<ModelInfo[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<{ [key: string]: number }>({});
@@ -164,13 +173,11 @@ export default function Settings() {
   };
 
   useEffect(() => {
+    // We only need to listen for completion to refresh the local model list
     const unlisten = listen<{ filename: string, downloaded: number, total: number }>("download_progress", (event) => {
       const { filename, downloaded, total } = event.payload;
-      const progress = Math.round((downloaded / total) * 100);
+      const progress = total > 0 ? Math.round((downloaded / total) * 100) : 0;
       setDownloadProgress(prev => ({ ...prev, [filename]: progress }));
-      
-      // Update global store
-      updateDownloadProgress(filename, progress, progress >= 100 ? 'completed' : 'downloading');
       
       if (progress >= 100) {
         setIsDownloading(prev => ({ ...prev, [filename]: false }));
@@ -237,11 +244,115 @@ export default function Settings() {
       <Separator />
 
       <Tabs defaultValue="cloud" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 max-w-[400px]">
+        <TabsList className="grid w-full grid-cols-3 max-w-[600px]">
           <TabsTrigger value="cloud">Cloud Models</TabsTrigger>
           <TabsTrigger value="local">Local Models</TabsTrigger>
+          <TabsTrigger value="config">Model Config</TabsTrigger>
         </TabsList>
         
+        <TabsContent value="config" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Default Extraction Parameters</CardTitle>
+              <CardDescription>
+                These values will be used as defaults for all extraction tasks.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="defTemp">Default Temperature</Label>
+                  <Input 
+                    id="defTemp" 
+                    type="number" 
+                    step="0.1"
+                    value={temperature}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTemperature(Number(e.target.value))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="defMaxTokens">Default Max Tokens</Label>
+                  <Input 
+                    id="defMaxTokens" 
+                    type="number" 
+                    value={maxTokens}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMaxTokens(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="defTopP">Default Top P</Label>
+                  <Input 
+                    id="defTopP" 
+                    type="number" 
+                    step="0.05"
+                    value={topP}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTopP(Number(e.target.value))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="defTopK">Default Top K</Label>
+                  <Input 
+                    id="defTopK" 
+                    type="number" 
+                    value={topK}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTopK(Number(e.target.value))}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="defSystemPrompt">Default System Prompt</Label>
+                <Textarea 
+                  id="defSystemPrompt" 
+                  value={systemPrompt}
+                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setSystemPrompt(e.target.value)}
+                  className="min-h-[100px]"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="defPromptText">Default User Instruction</Label>
+                <Textarea 
+                  id="defPromptText" 
+                  value={promptText}
+                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPromptText(e.target.value)}
+                  className="min-h-[100px]"
+                />
+              </div>
+
+              <Separator className="my-4" />
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <Eye className="w-4 h-4 text-blue-500" /> Vision Settings
+              </h3>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="visionRes">Vision Resolution (px)</Label>
+                  <Input 
+                    id="visionRes" 
+                    type="number" 
+                    value={visionResolution}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVisionResolution(Number(e.target.value))}
+                  />
+                  <p className="text-[10px] text-muted-foreground">Higher resolution improves OCR but uses more VRAM/RAM.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="maxImg">Max Images per Extraction</Label>
+                  <Input 
+                    id="maxImg" 
+                    type="number" 
+                    value={maxImages}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMaxImages(Number(e.target.value))}
+                  />
+                  <p className="text-[10px] text-muted-foreground">Number of PDF pages to process as images at once.</p>
+                </div>
+              </div>
+              </CardContent>          </Card>
+        </TabsContent>
+
         <TabsContent value="cloud" className="mt-6">
           <Card>
             <CardHeader>
@@ -441,7 +552,23 @@ export default function Settings() {
                                         <span className="text-sm truncate mr-4" title={fileName}>{fileName}</span>
                                         <div className="flex items-center gap-4 shrink-0">
                                             {downloadProgress[fileName] !== undefined && isDownloading[fileName] && (
-                                                <span className="text-xs text-muted-foreground">{downloadProgress[fileName]}%</span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs text-muted-foreground">{downloadProgress[fileName]}%</span>
+                                                    <Button
+                                                        size="sm"
+                                                        variant="ghost"
+                                                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                                        onClick={async () => {
+                                                            try {
+                                                                await invoke("cancel_download", { filename: fileName });
+                                                            } catch (err) {
+                                                                console.error(err);
+                                                            }
+                                                        }}
+                                                    >
+                                                        <Square className="w-3 h-3 fill-current" />
+                                                    </Button>
+                                                </div>
                                             )}
                                             <Button 
                                                 size="sm" 

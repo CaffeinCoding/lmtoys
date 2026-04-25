@@ -35,6 +35,8 @@ export function Header() {
     systemPrompt, setSystemPrompt,
     promptText, setPromptText,
     customJsonFormat, setCustomJsonFormat,
+    visionResolution, setVisionResolution,
+    maxImages, setMaxImages,
     provider, llmMode, cloudProvider,
     suggestNgl,
     isInitializing,
@@ -86,6 +88,8 @@ export function Header() {
           if (settings.systemPrompt !== undefined) setSystemPrompt(settings.systemPrompt);
           if (settings.promptText !== undefined) setPromptText(settings.promptText);
           if (settings.customJsonFormat !== undefined) setCustomJsonFormat(settings.customJsonFormat);
+          if (settings.visionResolution !== undefined) setVisionResolution(settings.visionResolution);
+          if (settings.maxImages !== undefined) setMaxImages(settings.maxImages);
         }
         // Mark this path as loaded to allow saving
         lastLoadedPath.current = path;
@@ -94,7 +98,7 @@ export function Header() {
       }
     }
     loadModelSettings();
-  }, [getSettingFilePath, isInitializing, setTemperature, setMaxTokens, setTopP, setTopK, setRepeatPenalty, setNGpuLayers, setSystemPrompt, setPromptText, setCustomJsonFormat]);
+  }, [getSettingFilePath, isInitializing, setTemperature, setMaxTokens, setTopP, setTopK, setRepeatPenalty, setNGpuLayers, setSystemPrompt, setPromptText, setCustomJsonFormat, setVisionResolution, setMaxImages]);
 
   // Save settings when parameters change
   useEffect(() => {
@@ -118,7 +122,9 @@ export function Header() {
         nGpuLayers,
         systemPrompt,
         promptText,
-        customJsonFormat
+        customJsonFormat,
+        visionResolution,
+        maxImages
       };
 
       try {
@@ -135,7 +141,7 @@ export function Header() {
 
     const timer = setTimeout(saveModelSettings, 500);
     return () => clearTimeout(timer);
-  }, [getSettingFilePath, isInitializing, temperature, maxTokens, topP, topK, repeatPenalty, nGpuLayers, systemPrompt, promptText, customJsonFormat]);
+  }, [getSettingFilePath, isInitializing, temperature, maxTokens, topP, topK, repeatPenalty, nGpuLayers, systemPrompt, promptText, customJsonFormat, visionResolution, maxImages]);
 
   useEffect(() => {
     const refresh = () => {
@@ -314,15 +320,33 @@ export function Header() {
                   {downloadQueue.map((item: { name: string; progress: number; status: string }) => (
                     <div key={item.name} className="p-2 rounded-md hover:bg-muted/50 transition-colors">
                       <div className="flex justify-between items-center mb-2">
-                        <span className="text-xs font-medium truncate max-w-[180px]" title={item.name}>{item.name}</span>
-                        <span className={cn(
-                          "text-[10px] px-1.5 py-0.5 rounded-full",
-                          item.status === 'completed' ? "bg-green-500/10 text-green-600" : 
-                          item.status === 'error' ? "bg-destructive/10 text-destructive" :
-                          "bg-blue-500/10 text-blue-600"
-                        )}>
-                          {item.status.toUpperCase()}
-                        </span>
+                        <span className="text-xs font-medium truncate max-w-[150px]" title={item.name}>{item.name}</span>
+                        <div className="flex items-center gap-2">
+                          <span className={cn(
+                            "text-[10px] px-1.5 py-0.5 rounded-full",
+                            item.status === 'completed' ? "bg-green-500/10 text-green-600" : 
+                            item.status === 'error' ? "bg-destructive/10 text-destructive" :
+                            "bg-blue-500/10 text-blue-600"
+                          )}>
+                            {item.status.toUpperCase()}
+                          </span>
+                          {item.status === 'downloading' && (
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              className="h-5 w-5 text-muted-foreground hover:text-destructive"
+                              onClick={async () => {
+                                try {
+                                  await invoke("cancel_download", { filename: item.name });
+                                } catch (err) {
+                                  console.error("Failed to cancel download", err);
+                                }
+                              }}
+                            >
+                              <Square className="w-2.5 h-2.5 fill-current" />
+                            </Button>
+                          )}
+                        </div>
                       </div>
                       <div className="space-y-1">
                         <Progress value={item.progress} className="h-1" />

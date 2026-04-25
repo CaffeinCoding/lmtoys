@@ -75,6 +75,12 @@ interface AppState {
   selectedRuntime: "cpu" | "vulkan" | "cuda" | "cuda12";
   setSelectedRuntime: (runtime: "cpu" | "vulkan" | "cuda" | "cuda12") => void;
 
+  // Vision Settings
+  visionResolution: number;
+  setVisionResolution: (res: number) => void;
+  maxImages: number;
+  setMaxImages: (count: number) => void;
+
   // Llama Server State
   serverStatus: "offline" | "loading" | "running";
   setServerStatus: (status: "offline" | "loading" | "running") => void;
@@ -177,6 +183,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedRuntime: "cpu",
   setSelectedRuntime: (runtime) => { set({ selectedRuntime: runtime }); get().saveToStore(); },
 
+  visionResolution: 768,
+  setVisionResolution: (res) => { set({ visionResolution: res }); get().saveToStore(); },
+  maxImages: 5,
+  setMaxImages: (count) => { set({ maxImages: count }); get().saveToStore(); },
+
   serverStatus: "offline",
   setServerStatus: (status) => set({ serverStatus: status }),
   serverPort: 8080,
@@ -261,6 +272,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       await store.set("modelDownloadPath", state.modelDownloadPath);
       await store.set("hfToken", state.hfToken);
       await store.set("extractionMode", state.extractionMode);
+      await store.set("visionResolution", state.visionResolution);
+      await store.set("maxImages", state.maxImages);
       await store.save();
     } catch (e) {
       console.error("Failed to persist state", e);
