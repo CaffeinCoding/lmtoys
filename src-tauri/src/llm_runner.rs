@@ -27,6 +27,19 @@ struct LlmEvent {
     message: String,
 }
 
+fn has_chat_template(model_path_str: &str) -> bool {
+    let mut file = match std::fs::File::open(model_path_str) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    use std::io::Read;
+    let mut buffer = vec![0u8; 16 * 1024 * 1024]; // Read up to 16MB
+    let bytes_read = file.read(&mut buffer).unwrap_or(0);
+    let slice = &buffer[..bytes_read];
+    let search_bytes = b"tokenizer.chat_template";
+    slice.windows(search_bytes.len()).any(|window| window == search_bytes)
+}
+
 fn add_mmproj_if_exists(cmd: &mut Command, model_path_str: &str) {
     let model_path = Path::new(model_path_str);
     if let Some(parent) = model_path.parent() {
@@ -85,6 +98,8 @@ pub async fn start_llama_server(
             }
         }
     }
+
+    let use_jinja = has_chat_template(&model);
 
     // 2. Resolve executable path
     let exe_name = if cfg!(target_os = "windows") { "llama-server.exe" } else { "llama-server" };
@@ -188,6 +203,10 @@ pub async fn start_llama_server(
        .stdout(Stdio::piped())
        .stderr(Stdio::piped());
 
+    if use_jinja {
+        cmd.arg("--jinja");
+    }
+
     if let Some(ref g) = grammar {
         if !g.is_empty() {
             if Path::new(g).exists() {
@@ -210,6 +229,7 @@ pub async fn start_llama_server(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
+    tracing::info!("Starting llama-server (main) with args: {:?}, {:?}", cmd.get_args(), use_jinja);
     let child = cmd.spawn().map_err(|e| format!("Failed to start llama-server: {}", e))?;
     handle_child_process(child, app, state)
 }

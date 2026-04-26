@@ -482,6 +482,20 @@ export default function Home() {
                         
                         setExtractionProgress({ current: totalPages, total: totalPages, message: "Merging results..." });
                         setTokensPerSecond(totalTokens / totalDuration);
+                        
+                        const mergedNames: string[] = [];
+                        const validData = allParsedData.filter((item: any) => !item.error);
+                        validData.forEach((item: any) => {
+                            if (item.name && item.name !== "N/A" && item.name !== "None") {
+                                if (Array.isArray(item.name)) {
+                                    mergedNames.push(...item.name);
+                                } else if (typeof item.name === 'string') {
+                                    mergedNames.push(item.name);
+                                }
+                            }
+                        });
+                        
+                        allParsedData = mergedNames.length > 0 ? [{ name: mergedNames }] : validData;
                         setExtractedData(allParsedData);
                         
                         const now = new Date();
