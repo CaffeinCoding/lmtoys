@@ -207,6 +207,27 @@ async fn download_model(
             if dest_path.exists() {
                 let _ = std::fs::remove_file(&dest_path);
             }
+            
+            // Try to remove empty parent directories up to root_path
+            let mut current_dir = dest_path.parent();
+            let root_path = PathBuf::from(&path);
+            while let Some(dir) = current_dir {
+                if dir == root_path || !dir.starts_with(&root_path) {
+                    break;
+                }
+                
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    if entries.count() == 0 {
+                        let _ = std::fs::remove_dir(dir);
+                        current_dir = dir.parent();
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
             Err("Download cancelled by user".into())
         }
     }

@@ -60,9 +60,29 @@ pub async fn start_llama_server(
 ) -> Result<(), String> {
     // 1. Check if already running
     {
-        let process_guard = state.process.lock().unwrap();
-        if process_guard.is_some() {
-            return Err("Server is already running".into());
+        let mut process_guard = state.process.lock().unwrap();
+        if let Some(mut child) = process_guard.take() {
+            match child.try_wait() {
+                Ok(Some(_status)) => {
+                    // Exited, can proceed
+                }
+                Ok(None) | Err(_) => {
+                    // Still running or error, kill it
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let mut job_guard = state.job_handle.lock().unwrap();
+        if let Some(job) = job_guard.take() {
+            use windows::Win32::Foundation::{HANDLE, CloseHandle};
+            unsafe {
+                let _ = CloseHandle(HANDLE(job as isize));
+            }
         }
     }
 

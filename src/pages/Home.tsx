@@ -183,7 +183,8 @@ export default function Home() {
         setTimeToFirstToken,
         parsedPdfText,
         setParsedPdfText,
-        suggestNgl
+        suggestNgl,
+        setModelDownloadPath
     } = useAppStore();
     const [pdfFile, setPdfFile] = useState<string | null>(null);
     const [numPages, setNumPages] = useState<number>();
@@ -191,10 +192,10 @@ export default function Home() {
     const [scale, setScale] = useState<number>(1.0);
     const [searchText, setSearchText] = useState("");
     const [isExtracting, setIsExtracting] = useState(false);
+    const [extractionProgress, setExtractionProgress] = useState<{current: number, total: number, message: string} | null>(null);
     const [downloadedModels, setDownloadedModels] = useState<ModelInfo[]>([]);
     const [isTextParseOpen, setIsTextParseOpen] = useState(false);
     const [isJsonValid, setIsJsonValid] = useState(true);
-    const { setModelDownloadPath } = useAppStore();
     const abortControllerRef = useRef<AbortController | null>(null);
 
     useEffect(() => {
@@ -378,171 +379,306 @@ export default function Home() {
                 ];
 
                 if (extractionMode === "vision" && isVisionModel && currentPdfPath) {
-                    // Convert multiple PDF pages to Images
+                    let allParsedData: any[] = [];
+                    let totalTokens = 0;
+                    let totalDuration = 0;
+                    let rawResponses = [];
+                    
                     try {
                         const pdf = await pdfjs.getDocument(pdfFile!).promise;
                         const totalPages = pdf.numPages;
-                        const endPage = Math.min(pageNumber + maxImages - 1, totalPages);
+                        const batches = Math.ceil(totalPages / maxImages);
+                        
+                        for (let batch = 0; batch < batches; batch++) {
+                            const start = batch * maxImages + 1;
+                            const end = Math.min((batch + 1) * maxImages, totalPages);
+                            
+                            setExtractionProgress({ 
+                                current: batch, 
+                                total: batches, 
+                                message: `Processing pages ${start} to ${end}...` 
+                            });
+                            
+                            const content: any[] = [{ type: "text", text: finalUserPrompt }];
+                            
+                            for (let i = start; i <= end; i++) {
+                                const page = await pdf.getPage(i);
+                                const initialViewport = page.getViewport({ scale: 1.0 });
+                                const scale = visionResolution / Math.max(initialViewport.width, initialViewport.height);
+                                const viewport = page.getViewport({ scale });
 
-                        const content: any[] = [{ type: "text", text: finalUserPrompt }];
+                                const canvas = document.createElement("canvas");
+                                const context = canvas.getContext("2d");
+                                canvas.height = viewport.height;
+                                canvas.width = viewport.width;
 
-                        for (let i = pageNumber; i <= endPage; i++) {
-                            const page = await pdf.getPage(i);
-                            // Calculate scale to match visionResolution
-                            const initialViewport = page.getViewport({ scale: 1.0 });
-                            const scale = visionResolution / Math.max(initialViewport.width, initialViewport.height);
-                            const viewport = page.getViewport({ scale });
+                                await page.render({ canvasContext: context!, viewport, canvas: canvas as any }).promise;
 
-                            const canvas = document.createElement("canvas");
-                            const context = canvas.getContext("2d");
-                            canvas.height = viewport.height;
-                            canvas.width = viewport.width;
+                                const imageData = canvas.toDataURL("image/jpeg", 0.8);
+                                content.push({ type: "image_url", image_url: { url: imageData } });
+                            }
+                            
+                            const messages = [
+                                { role: "system", content: finalSystemPrompt },
+                                { role: "user", content }
+                            ];
+                            
+                            setExtractionProgress({ current: batch, total: batches, message: `Extracting data (batch ${batch + 1} of ${batches})...` });
+                            const batchStartTime = performance.now();
+                            
+                            response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                    model: builtInModel || "local-model",
+                                    messages,
+                                    stream: true,
+                                    temperature,
+                                    max_tokens: maxTokens,
+                                    top_p: topP,
+                                    presence_penalty: repeatPenalty,
+                                    grammar: JSON_GBNF,
+                                }),
+                                signal: controller.signal,
+                            });
 
-                            await page.render({ 
-                                canvasContext: context!, 
-                                viewport,
-                                // @ts-ignore
-                                canvas: canvas 
-                            }).promise;
+                            if (!response.ok) throw new Error(`Llama Server returned ${response.status}`);
+                            if (!response.body) throw new Error("No response body");
 
-                            const imageData = canvas.toDataURL("image/jpeg", 0.8);
-                            content.push({ type: "image_url", image_url: { url: imageData } });
+                            const reader = response.body.getReader();
+                            const decoder = new TextDecoder();
+                            let resultText = "";
+                            let tokenCount = 0;
+
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
+
+                                const chunk = decoder.decode(value, { stream: true });
+                                const lines = chunk.split("\n");
+
+                                for (const line of lines) {
+                                    const trimmedLine = line.trim();
+                                    if (trimmedLine.startsWith("data: ") && trimmedLine !== "data: [DONE]") {
+                                        try {
+                                            const data = JSON.parse(trimmedLine.slice(6));
+                                            const token = data.choices[0]?.delta?.content || "";
+                                            if (token) {
+                                                if (tokenCount === 0 && batch === 0) {
+                                                    firstTokenTime = performance.now() - startTime;
+                                                    setTimeToFirstToken(Math.round(firstTokenTime));
+                                                }
+                                                resultText += token;
+                                                setExtractedText((prev: string) => prev + token);
+                                                tokenCount++;
+                                            }
+                                        } catch (e) {}
+                                    }
+                                }
+                            }
+                            
+                            totalTokens += tokenCount;
+                            totalDuration += (performance.now() - batchStartTime) / 1000;
+                            rawResponses.push(resultText);
+                            
+                            const parsedData = extractJsonFromString(resultText);
+                            if (parsedData) {
+                                allParsedData = allParsedData.concat(parsedData);
+                            }
                         }
+                        
+                        setExtractionProgress({ current: batches, total: batches, message: "Merging results..." });
+                        setTokensPerSecond(totalTokens / totalDuration);
+                        setExtractedData(allParsedData);
+                        
+                        const now = new Date();
+                        const dateStr = now.toISOString().slice(2, 10).replace(/-/g, '_');
+                        const fileName = currentPdfPath?.split('\\').pop()?.split('/').pop() || "unknown";
+                        const historyName = `${fileName}_${dateStr}`;
+                        
+                        const state = useAppStore.getState();
+                        const configSnapshot = {
+                            modelName: state.builtInModel || "unknown",
+                            llmMode: "local" as const,
+                            provider: "builtin",
+                            temperature: state.temperature,
+                            maxTokens: state.maxTokens,
+                            topP: state.topP,
+                            topK: state.topK,
+                            repeatPenalty: state.repeatPenalty,
+                            nGpuLayers: state.nGpuLayers,
+                            systemPrompt: state.systemPrompt,
+                            promptText: state.promptText,
+                            customJsonFormat: state.customJsonFormat,
+                            rawResponse: rawResponses.join("\n\n--- Next Batch ---\n\n"),
+                            runtime: state.selectedRuntime,
+                            ttft: Math.round(firstTokenTime || 0),
+                            speed: totalTokens / totalDuration
+                        };
 
-                        messages.push({
-                            role: "user",
-                            content
+                        useAppStore.getState().addHistoryItem({
+                            id: crypto.randomUUID(),
+                            name: historyName,
+                            data: allParsedData,
+                            timestamp: now.getTime(),
+                            config: configSnapshot
                         });
-                        console.log(`Vision extraction: ${endPage - pageNumber + 1} images attached at ${visionResolution}px.`);
-                    } catch (e) {
-                        console.error("Failed to convert PDF pages to images", e);
-                        // Fallback to text only
-                        messages.push({ role: "user", content: finalUserPrompt });
+
+                        setIsExtracting(false);
+                        setExtractionProgress(null);
+                        setIsStreaming(false);
+                        navigate("/data");
+                        return;
+                    } catch (e: any) {
+                        console.error("Vision batch processing failed", e);
+                        throw e;
                     }
                 } else {
-                    messages.push({ role: "user", content: finalUserPrompt });
+                    messages.push({ role: "user", content: isVisionModel ? [{ type: "text", text: finalUserPrompt }] : finalUserPrompt });
+                    response = await fetch(
+                        `http://127.0.0.1:${port}/v1/chat/completions`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                model: builtInModel || "local-model",
+                                messages,
+                                stream: true,
+                                temperature,
+                                max_tokens: maxTokens,
+                                top_p: topP,
+                                presence_penalty: repeatPenalty,
+                                grammar: JSON_GBNF,
+                            }),
+                            signal: controller.signal,
+                        },
+                    );
+
+                    if (!response.ok) {
+                        throw new Error(`Llama Server returned ${response.status}`);
+                    }
+
+                    if (!response.body) throw new Error("No response body");
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let resultText = "";
+                    let tokenCount = 0;
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        const chunk = decoder.decode(value, { stream: true });
+                        const lines = chunk.split("\n");
+
+                        for (const line of lines) {
+                            const trimmedLine = line.trim();
+                            if (
+                                trimmedLine.startsWith("data: ") &&
+                                trimmedLine !== "data: [DONE]"
+                            ) {
+                                try {
+                                    const data = JSON.parse(trimmedLine.slice(6));
+                                    const token =
+                                        data.choices[0]?.delta?.content || "";
+                                    if (token) {
+                                        if (tokenCount === 0) {
+                                            firstTokenTime =
+                                                performance.now() - startTime;
+                                            setTimeToFirstToken(
+                                                Math.round(firstTokenTime),
+                                            );
+                                        }
+                                        resultText += token;
+                                        setExtractedText((prev: string) => prev + token);
+                                        tokenCount++;
+                                    }
+                                } catch (e) {
+                                    // skip parse error
+                                }
+                            }
+                        }
+                    }
+
+                    setIsStreaming(false);
+
+                    const endTime = performance.now();
+                    const durationSeconds = (endTime - startTime) / 1000;
+                    setTokensPerSecond(tokenCount / durationSeconds);
+
+                    const parsedData = extractJsonFromString(resultText);
+                    if (!parsedData) {
+                        throw new Error(
+                            `Failed to parse JSON from model response. The model might not have followed the format instructions.`,
+                        );
+                    }
+                    
+                    setExtractedData(parsedData);
+                    
+                    // Add to history
+                    const now = new Date();
+                    const dateStr = now.toISOString().slice(2, 10).replace(/-/g, '_');
+                    const fileName = currentPdfPath?.split('\\').pop()?.split('/').pop() || "unknown";
+                    const historyName = `${fileName}_${dateStr}`;
+                    
+                    const state = useAppStore.getState();
+                    const configSnapshot = {
+                        modelName: state.builtInModel || "unknown",
+                        llmMode: "local" as const,
+                        provider: "builtin",
+                        temperature: state.temperature,
+                        maxTokens: state.maxTokens,
+                        topP: state.topP,
+                        topK: state.topK,
+                        repeatPenalty: state.repeatPenalty,
+                        nGpuLayers: state.nGpuLayers,
+                        systemPrompt: state.systemPrompt,
+                        promptText: state.promptText,
+                        customJsonFormat: state.customJsonFormat,
+                        rawResponse: resultText,
+                        runtime: state.selectedRuntime,
+                        ttft: Math.round(firstTokenTime || 0),
+                        speed: tokenCount / durationSeconds
+                    };
+
+                    useAppStore.getState().addHistoryItem({
+                        id: crypto.randomUUID(),
+                        name: historyName,
+                        data: Array.isArray(parsedData) ? parsedData : [parsedData],
+                        timestamp: now.getTime(),
+                        config: configSnapshot
+                    });
+
+                    setIsExtracting(false);
+                    navigate("/data");
+                    return; // 여기서 종료 — fetch 기반 흐름을 건너뜜
                 }
+            } else if (provider === "ollama") {
+                // 3a. Ollama API로 전송 (기존 로직 유지)
                 response = await fetch(
-                    `http://127.0.0.1:${port}/v1/chat/completions`,
+                    "http://localhost:11434/api/chat",
                     {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
-                            model: builtInModel || "local-model",
-                            messages,
-                            stream: true,
-                            temperature,
-                            max_tokens: maxTokens,
-                            top_p: topP,
-                            presence_penalty: repeatPenalty,
-                            grammar: JSON_GBNF,
+                            model: modelName,
+                            messages: [
+                                { role: "system", content: finalSystemPrompt },
+                                { role: "user", content: finalUserPrompt },
+                            ],
+                            stream: false,
+                            options: {
+                                temperature,
+                                num_ctx: maxTokens,
+                                top_p: topP,
+                                top_k: topK,
+                                repeat_penalty: repeatPenalty
+                            }
                         }),
                         signal: controller.signal,
                     },
                 );
-
-                if (!response.ok) {
-                    throw new Error(`Llama Server returned ${response.status}`);
-                }
-
-                if (!response.body) throw new Error("No response body");
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let resultText = "";
-                let tokenCount = 0;
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    const chunk = decoder.decode(value, { stream: true });
-                    const lines = chunk.split("\n");
-
-                    for (const line of lines) {
-                        const trimmedLine = line.trim();
-                        if (
-                            trimmedLine.startsWith("data: ") &&
-                            trimmedLine !== "data: [DONE]"
-                        ) {
-                            try {
-                                const data = JSON.parse(trimmedLine.slice(6));
-                                const token =
-                                    data.choices[0]?.delta?.content || "";
-                                if (token) {
-                                    if (tokenCount === 0) {
-                                        firstTokenTime =
-                                            performance.now() - startTime;
-                                        setTimeToFirstToken(
-                                            Math.round(firstTokenTime),
-                                        );
-                                    }
-                                    resultText += token;
-                                    setExtractedText((prev: string) => prev + token);
-                                    tokenCount++;
-                                }
-                            } catch (e) {
-                                // skip parse error
-                            }
-                        }
-                    }
-                }
-
-                setIsStreaming(false);
-
-                const endTime = performance.now();
-                const durationSeconds = (endTime - startTime) / 1000;
-                setTokensPerSecond(tokenCount / durationSeconds);
-
-                const parsedData = extractJsonFromString(resultText);
-                if (!parsedData) {
-                    throw new Error(
-                        `Failed to parse JSON from model response. The model might not have followed the format instructions.`,
-                    );
-                }
-                
-                setExtractedData(parsedData);
-                
-                // Add to history
-                const now = new Date();
-                const dateStr = now.toISOString().slice(2, 10).replace(/-/g, '_');
-                const fileName = currentPdfPath?.split('\\').pop()?.split('/').pop() || "unknown";
-                const historyName = `${fileName}_${dateStr}`;
-                
-                const state = useAppStore.getState();
-                const configSnapshot = {
-                    modelName: state.builtInModel || "unknown",
-                    llmMode: "local" as const,
-                    provider: "builtin",
-                    temperature: state.temperature,
-                    maxTokens: state.maxTokens,
-                    topP: state.topP,
-                    topK: state.topK,
-                    repeatPenalty: state.repeatPenalty,
-                    nGpuLayers: state.nGpuLayers,
-                    systemPrompt: state.systemPrompt,
-                    promptText: state.promptText,
-                    customJsonFormat: state.customJsonFormat,
-                    rawResponse: resultText,
-                    runtime: state.selectedRuntime,
-                    ttft: Math.round(firstTokenTime || 0),
-                    speed: tokenCount / durationSeconds
-                };
-
-                useAppStore.getState().addHistoryItem({
-                    id: crypto.randomUUID(),
-                    name: historyName,
-                    data: Array.isArray(parsedData) ? parsedData : [parsedData],
-                    timestamp: now.getTime(),
-                    config: configSnapshot
-                });
-
-                setIsExtracting(false);
-                navigate("/data");
-                return; // 여기서 종료 — fetch 기반 흐름을 건너뜜
-            } else if (provider === "ollama") {
-                // 3a. Ollama API로 전송 (기존 로직 유지)
-                // ...
             }
 
             if (!response || !response.ok) {
@@ -552,7 +688,17 @@ export default function Home() {
             }
 
             const data = await response.json();
-            const resultText = data.choices[0].message.content;
+            
+            // Handle different API response structures (OpenAI vs Ollama)
+            let resultText = "";
+            if (data.choices && data.choices[0]?.message) {
+                resultText = data.choices[0].message.content; // OpenAI format
+            } else if (data.message && data.message.content) {
+                resultText = data.message.content; // Ollama format
+            } else {
+                throw new Error("Unexpected API response format");
+            }
+            
             setExtractedText(resultText);
 
             const parsedData = extractJsonFromString(resultText);
@@ -1147,8 +1293,23 @@ export default function Home() {
                             )}
                         </div>
 
+                        {extractionProgress && (
+                            <div className="space-y-1.5 pt-2">
+                                <div className="flex justify-between text-[10px] font-medium text-muted-foreground">
+                                    <span>{extractionProgress.message}</span>
+                                    <span>{Math.round((extractionProgress.current / extractionProgress.total) * 100)}%</span>
+                                </div>
+                                <div className="h-1.5 w-full bg-secondary overflow-hidden rounded-full">
+                                    <div 
+                                        className="h-full bg-primary transition-all duration-300 ease-in-out" 
+                                        style={{ width: `${Math.round((extractionProgress.current / extractionProgress.total) * 100)}%` }}
+                                    />
+                                </div>
+                            </div>
+                        )}
+
                         {isStreaming && (
-                            <div className="p-3 border rounded-md bg-primary/5 text-[10px] font-mono animate-pulse max-h-[150px] overflow-y-auto whitespace-pre-wrap border-primary/20">
+                            <div className="p-3 border rounded-md bg-primary/5 text-[10px] font-mono animate-pulse max-h-[150px] overflow-y-auto whitespace-pre-wrap border-primary/20 mt-2">
                                 {extractedText || "Model is generating response..."}
                             </div>
                         )}
