@@ -43,8 +43,7 @@ export default function Settings() {
     topK, setTopK,
     systemPrompt, setSystemPrompt,
     promptText, setPromptText,
-    visionResolution, setVisionResolution,
-    maxImages, setMaxImages
+    visionResolution, setVisionResolution
   } = useAppStore();
   const [downloadedModels, setDownloadedModels] = useState<ModelInfo[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<{ [key: string]: number }>({});
@@ -338,16 +337,6 @@ export default function Settings() {
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVisionResolution(Number(e.target.value))}
                   />
                   <p className="text-[10px] text-muted-foreground">Higher resolution improves OCR but uses more VRAM/RAM.</p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="maxImg">Max Images per Extraction</Label>
-                  <Input 
-                    id="maxImg" 
-                    type="number" 
-                    value={maxImages}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMaxImages(Number(e.target.value))}
-                  />
-                  <p className="text-[10px] text-muted-foreground">Number of PDF pages to process as images at once.</p>
                 </div>
               </div>
               </CardContent>          </Card>

@@ -1,47 +1,54 @@
 # 프로젝트 테스트 중 발생한 이슈사항 모음
 
-- data dashboard에 history 접기/펴기 아이콘 버튼과 삭제 아이콘 버튼의 위치를 변경해줘.
-    - export csv 버튼 우측에 배치해줘.
-    - 버튼 순서는 (삭제 아이콘 버튼, history 접기/펴기 아이콘 버튼)이야.
-- export excel, csv 처리를 할때 raw response에서 json key가 같은 value를 묶어서 데이터 누락되는 문제가 발생했어.
-    - 예를들어 데이터가
-        ```json
+- vision 추출 과정에서 전체 추출이 완료된 후 각각의 추출 결과들을 하나로 합치는 기능이 필요해.
+    - 현재
+
+        ```
+        {"error": "제공된 이미지/텍스트 데이터가 비어 있거나, 요청하신 '2026 금지약물' 정보를 포함하고 있지 않아 성분명을 추출할 수 없습니다."}
+
+        --- Next Page ---
+
+        {"error": "제공된 이미지에는 2026년 금지 약물 목록의 성분명이 포함되어 있지 않습니다. 이미지에는 'World Anti-Doping Code International Standard Prohibited List 2026'이라는 제목만 나와 있습니다."}
+
+        --- Next Page ---
+
+        {"error": "제공된 텍스트 데이터는 목차(Table of Contents)이며, 2026년 금지 약물에 대한 구체적인 성분명 정보가 포함되어 있지 않습니다. 따라서 성분명을 추출할 수 없습니다."}
+
+        --- Next Page ---
+
+        {"name": "N/A"}
+
+        --- Next Page ---
+
+        {"name": "BPC-157, 2,4-dinitrofenol (DNP), ryanidine receptor-1 calistabin complex stabilizers (e.g., S-107, S48168 (ARM210)) and tropin activators (e.g., riledesemiv and tirasemtiv)"}
+
+        --- Next Page ---
+
+        {"name": "Anabolic agents"}
+
+        --- Next Page ---
+
+        {"name": ["Testosterone", "Nandrolone", "Methandrostenolone", "Oxymetholone", "Anavar", "Trenbolone", "Masteron", "Dianabol", "Winstrol", "Stanozolol", "Drostanolone", "Flutamide", "Clomiphene", "Tamoxifen", "Bremelanotide"]}
+
+        --- Next Page ---
+
+        {"name": "Erythropoietin"}
+
+        ...생략
+        ```
+
+        - 목표
+
+        ```
         {
-            "name": "1",
-            "name": "2",
-            "name": "3",
-            "name": "4",
-            "name": "5",
-            "name": "6",
-            "name": "7",
-            "name": "8",
-            "name": "9",
-            "name": "10"
+            "name": [
+                "BPC-157, 2,4-dinitrofenol (DNP), ryanidine receptor-1 calistabin complex stabilizers (e.g., S-107, S48168 (ARM210)) and tropin activators (e.g., riledesemiv and tirasemtiv)",
+                "Testosterone", "Nandrolone", "Methandrostenolone", "Oxymetholone", "Anavar", "Trenbolone", "Masteron", "Dianabol", "Winstrol", "Stanozolol", "Drostanolone", "Flutamide", "Clomiphene", "Tamoxifen", "Bremelanotide", "Erythropoietin", ...
+            ]
         }
         ```
-        일 경우 export된 데이터는
-        |name|
-        |---|
-        |1|
-        만 표시하고 있어.
-        - 목표형태
-          |name|
-          |---|
-          |1|
-          |2|
-          |3|
-          |4|
-          |5|
-          |6|
-          |7|
-          |8|
-          |9|
-          |10|
-- 다양한 성능의 pc를 지원하고 정확성을 높이기 위해 이미지 batch 처리를 제거하고 한번에 1장의 이미지를 request하도록 수정하는게 좋겠어.
-    - 한번에 처리 가능한 이미지 갯수 옵션을 삭제하는게 좋겠어.
-    - 각각의 request의 response를 모아서 하나의 결과처럼 보이도록 했으면 좋겠어.
-- llama-server와 통신에 부분에 최적화와 리펙토링이 필요해.
-    - 기존 home.tsx에 구현되어있는 llama-server 통신 부분을 src/api 폴더에 별도의 파일로 분리가 필요해.
-    - openai api의 표준 멀티모달(multimodal) 형식을 따르도록 수정이 필요해.
-    - openai의 Node.js/Browser SDK 라이브러리를 설치해서 type 안전성과 통신 규격의 일관성을 확보하는게 좋겠어.
-        - openai를 사용할때 api key를 설정하지 않으면 동작하지 않는 문제가 있긴 한데 어차피 llama-server는 로컬/내부망에서 동작하기 때문에 dangerouslyAllowBrowser 옵션을 true로 해당 문제를 해결하는게 좋겠어.
+
+    - vision api에서 error message는 제거하는게 좋겠어.
+
+- llama-server를 실행할때 --jinja 옵션을 활성화하는게 좋겠어.
+    - --jinja 옵션 활성화를 기본 설정으로 하고 llama-server를 실행하기 전에 gguf 파일의 헤더 부분만 읽어서 'tokenizer.chat_template'이 존재하지 않으면 --jinja 옵션을 제거하는게 좋겠어.

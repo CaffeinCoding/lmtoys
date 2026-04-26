@@ -37,6 +37,7 @@ import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 import { cn } from "@/lib/utils";
+import { streamLlamaCompletion } from "@/api/llama-api";
 
 // Configure PDF.js worker to use CDN to prevent Vite bundling issues
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -60,60 +61,91 @@ interface ModelInfo {
  * Finds the first '[' or '{' and the last matching ']' or '}'.
  */
 function extractJsonFromString(text: string): any[] | null {
-    const cleanJsonString = (jsonStr: string) => {
-        return jsonStr
-            .replace(/\/\/.*$/gm, "") // Remove single line comments
-            .replace(/\/\*[\s\S]*?\*\//g, "") // Remove multi-line comments
-            .replace(/,(\s*[\]}])/g, "$1") // Remove trailing commas
-            .trim();
-    };
-
-    const tryParse = (jsonStr: string): any[] | null => {
+    // Attempt standard parse first
+    const tryStandardParse = (jsonStr: string) => {
         try {
-            const cleaned = cleanJsonString(jsonStr);
-            const parsed = JSON.parse(cleaned);
-            if (Array.isArray(parsed)) return parsed;
-            
-            // If it's a single object but contains arrays of the same length, 
-            // it might be an "exploded" table format. 
-            // But for now, just return as a single-item array.
-            return [parsed];
-        } catch (e) {
-            try {
-                let fixed = cleanJsonString(jsonStr);
-                if (fixed.startsWith('[') && !fixed.endsWith(']')) fixed += ']';
-                if (fixed.startsWith('{') && !fixed.endsWith('}')) fixed += '}';
-                const parsed = JSON.parse(fixed);
-                return Array.isArray(parsed) ? parsed : [parsed];
-            } catch (e2) {
-                return null;
-            }
+            const cleaned = jsonStr.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "").trim();
+            return JSON.parse(cleaned);
+        } catch {
+            return null;
         }
     };
 
-    // 1. Try to find all JSON-like structures (objects or arrays)
-    // This handles cases where LLM outputs multiple objects not wrapped in an array
-    const results: any[] = [];
-    const regex = /(\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\})|(\[(?:[^[\]]|(?:\[(?:[^[\]]|(?:\[[^[\]]*\]))*\]))*\])/g;
+    // Advanced Regex fallback for duplicate keys
+    const regexFallback = (rawText: string): any[] | null => {
+        // Matches string values, numbers, booleans, and null
+        const pairs = Array.from(rawText.matchAll(/"([^"]+)"\s*:\s*("[^"]*"|-?\d+(?:\.\d+)?|true|false|null)/g));
+        if (pairs.length === 0) return null;
+
+        const grouped: Record<string, any[]> = {};
+        for (const match of pairs) {
+            const key = match[1];
+            let rawValue = match[2];
+            let value;
+            if (rawValue.startsWith('"')) {
+                value = rawValue.slice(1, -1); // remove quotes
+            } else if (rawValue === 'true') {
+                value = true;
+            } else if (rawValue === 'false') {
+                value = false;
+            } else if (rawValue === 'null') {
+                value = null;
+            } else {
+                value = Number(rawValue);
+            }
+
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(value);
+        }
+
+        // Pivot to rows
+        const maxLen = Math.max(...Object.values(grouped).map(arr => arr.length));
+        const rows = [];
+        for (let i = 0; i < maxLen; i++) {
+            const row: any = {};
+            for (const key of Object.keys(grouped)) {
+                row[key] = grouped[key][i] !== undefined ? grouped[key][i] : null;
+            }
+            rows.push(row);
+        }
+        return rows;
+    };
+
+    // First try finding standard objects/arrays
+    const regex = /(\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\})|(\[(?:[^\[\]]|(?:\[(?:[^\[\]]|(?:\[[^\[\]]*\]))*\]))*\])/g;
     let match;
+    const results: any[] = [];
     
     while ((match = regex.exec(text)) !== null) {
         const jsonStr = match[0];
-        const parsed = tryParse(jsonStr);
+        const parsed = tryStandardParse(jsonStr);
         if (parsed) {
-            results.push(...parsed);
+            // Check if it's an object and we might have lost keys due to duplicates
+            // We can compare the number of keys in the raw string vs parsed
+            const rawKeys = Array.from(jsonStr.matchAll(/"([^"]+)"\s*:/g)).length;
+            const parsedKeys = Array.isArray(parsed) ? 0 : Object.keys(parsed).length;
+            
+            if (!Array.isArray(parsed) && rawKeys > parsedKeys) {
+                // Duplicate keys detected!
+                const fallback = regexFallback(jsonStr);
+                if (fallback) results.push(...fallback);
+            } else {
+                if (Array.isArray(parsed)) results.push(...parsed);
+                else results.push(parsed);
+            }
+        } else {
+            // Unparsable, maybe due to duplicate keys or bad syntax, try fallback
+            const fallback = regexFallback(jsonStr);
+            if (fallback) results.push(...fallback);
         }
     }
-
+    
     if (results.length > 0) return results;
-
-    // 2. Fallback to the original markdown block extraction
-    const markdownMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
-    if (markdownMatch) {
-        const result = tryParse(markdownMatch[1]);
-        if (result) return result;
-    }
-
+    
+    // Global fallback
+    const fallback = regexFallback(text);
+    if (fallback && fallback.length > 0) return fallback;
+    
     return null;
 }
 
@@ -368,15 +400,10 @@ export default function Home() {
                 let firstTokenTime: number | null = null;
                 const port = useAppStore.getState().serverPort;
                 const visionResolution = useAppStore.getState().visionResolution;
-                const maxImages = useAppStore.getState().maxImages;
 
                 // Vision support detection
                 const currentModelInfo = downloadedModels.find(m => (typeof m === 'string' ? m : m.name) === builtInModel);
                 const isVisionModel = (typeof currentModelInfo === 'object' && currentModelInfo?.has_vision) || false;
-
-                let messages: any[] = [
-                    { role: "system", content: finalSystemPrompt },
-                ];
 
                 if (extractionMode === "vision" && isVisionModel && currentPdfPath) {
                     let allParsedData: any[] = [];
@@ -387,99 +414,65 @@ export default function Home() {
                     try {
                         const pdf = await pdfjs.getDocument(pdfFile!).promise;
                         const totalPages = pdf.numPages;
-                        const batches = Math.ceil(totalPages / maxImages);
                         
-                        for (let batch = 0; batch < batches; batch++) {
-                            const start = batch * maxImages + 1;
-                            const end = Math.min((batch + 1) * maxImages, totalPages);
-                            
+                        for (let i = 1; i <= totalPages; i++) {
                             setExtractionProgress({ 
-                                current: batch, 
-                                total: batches, 
-                                message: `Processing pages ${start} to ${end}...` 
+                                current: i - 1, 
+                                total: totalPages, 
+                                message: `Processing page ${i} of ${totalPages}...` 
                             });
                             
                             const content: any[] = [{ type: "text", text: finalUserPrompt }];
                             
-                            for (let i = start; i <= end; i++) {
-                                const page = await pdf.getPage(i);
-                                const initialViewport = page.getViewport({ scale: 1.0 });
-                                const scale = visionResolution / Math.max(initialViewport.width, initialViewport.height);
-                                const viewport = page.getViewport({ scale });
+                            const page = await pdf.getPage(i);
+                            const initialViewport = page.getViewport({ scale: 1.0 });
+                            const scale = visionResolution / Math.max(initialViewport.width, initialViewport.height);
+                            const viewport = page.getViewport({ scale });
 
-                                const canvas = document.createElement("canvas");
-                                const context = canvas.getContext("2d");
-                                canvas.height = viewport.height;
-                                canvas.width = viewport.width;
+                            const canvas = document.createElement("canvas");
+                            const context = canvas.getContext("2d");
+                            canvas.height = viewport.height;
+                            canvas.width = viewport.width;
 
-                                await page.render({ canvasContext: context!, viewport, canvas: canvas as any }).promise;
+                            await page.render({ canvasContext: context!, viewport, canvas: canvas as any }).promise;
 
-                                const imageData = canvas.toDataURL("image/jpeg", 0.8);
-                                content.push({ type: "image_url", image_url: { url: imageData } });
-                            }
+                            const imageData = canvas.toDataURL("image/jpeg", 0.8);
+                            content.push({ type: "image_url", image_url: { url: imageData } });
                             
                             const messages = [
                                 { role: "system", content: finalSystemPrompt },
                                 { role: "user", content }
                             ];
                             
-                            setExtractionProgress({ current: batch, total: batches, message: `Extracting data (batch ${batch + 1} of ${batches})...` });
+                            setExtractionProgress({ current: i - 1, total: totalPages, message: `Extracting data (page ${i} of ${totalPages})...` });
                             const batchStartTime = performance.now();
                             
-                            response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({
-                                    model: builtInModel || "local-model",
-                                    messages,
-                                    stream: true,
-                                    temperature,
-                                    max_tokens: maxTokens,
-                                    top_p: topP,
-                                    presence_penalty: repeatPenalty,
-                                    grammar: JSON_GBNF,
-                                }),
+                            const { resultText, tokenCount } = await streamLlamaCompletion({
+                                port,
+                                model: builtInModel || "local-model",
+                                messages,
+                                temperature,
+                                maxTokens,
+                                topP,
+                                topK,
+                                repeatPenalty,
+                                grammar: JSON_GBNF,
                                 signal: controller.signal,
-                            });
-
-                            if (!response.ok) throw new Error(`Llama Server returned ${response.status}`);
-                            if (!response.body) throw new Error("No response body");
-
-                            const reader = response.body.getReader();
-                            const decoder = new TextDecoder();
-                            let resultText = "";
-                            let tokenCount = 0;
-
-                            while (true) {
-                                const { done, value } = await reader.read();
-                                if (done) break;
-
-                                const chunk = decoder.decode(value, { stream: true });
-                                const lines = chunk.split("\n");
-
-                                for (const line of lines) {
-                                    const trimmedLine = line.trim();
-                                    if (trimmedLine.startsWith("data: ") && trimmedLine !== "data: [DONE]") {
-                                        try {
-                                            const data = JSON.parse(trimmedLine.slice(6));
-                                            const token = data.choices[0]?.delta?.content || "";
-                                            if (token) {
-                                                if (tokenCount === 0 && batch === 0) {
-                                                    firstTokenTime = performance.now() - startTime;
-                                                    setTimeToFirstToken(Math.round(firstTokenTime));
-                                                }
-                                                resultText += token;
-                                                setExtractedText((prev: string) => prev + token);
-                                                tokenCount++;
-                                            }
-                                        } catch (e) {}
+                                onFirstToken: () => {
+                                    if (i === 1) {
+                                        firstTokenTime = performance.now() - startTime;
+                                        setTimeToFirstToken(Math.round(firstTokenTime));
                                     }
+                                },
+                                onToken: (token) => {
+                                    setExtractedText((prev: string) => prev + token);
                                 }
-                            }
+                            });
                             
                             totalTokens += tokenCount;
                             totalDuration += (performance.now() - batchStartTime) / 1000;
                             rawResponses.push(resultText);
+                            setExtractedText((prev: string) => prev + "\n\n--- Next Page ---\n\n");
                             
                             const parsedData = extractJsonFromString(resultText);
                             if (parsedData) {
@@ -487,7 +480,7 @@ export default function Home() {
                             }
                         }
                         
-                        setExtractionProgress({ current: batches, total: batches, message: "Merging results..." });
+                        setExtractionProgress({ current: totalPages, total: totalPages, message: "Merging results..." });
                         setTokensPerSecond(totalTokens / totalDuration);
                         setExtractedData(allParsedData);
                         
@@ -510,7 +503,7 @@ export default function Home() {
                             systemPrompt: state.systemPrompt,
                             promptText: state.promptText,
                             customJsonFormat: state.customJsonFormat,
-                            rawResponse: rawResponses.join("\n\n--- Next Batch ---\n\n"),
+                            rawResponse: rawResponses.join("\n\n--- Next Page ---\n\n"),
                             runtime: state.selectedRuntime,
                             ttft: Math.round(firstTokenTime || 0),
                             speed: totalTokens / totalDuration
@@ -530,76 +523,34 @@ export default function Home() {
                         navigate("/data");
                         return;
                     } catch (e: any) {
-                        console.error("Vision batch processing failed", e);
+                        console.error("Vision sequential processing failed", e);
                         throw e;
                     }
                 } else {
-                    messages.push({ role: "user", content: isVisionModel ? [{ type: "text", text: finalUserPrompt }] : finalUserPrompt });
-                    response = await fetch(
-                        `http://127.0.0.1:${port}/v1/chat/completions`,
-                        {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                model: builtInModel || "local-model",
-                                messages,
-                                stream: true,
-                                temperature,
-                                max_tokens: maxTokens,
-                                top_p: topP,
-                                presence_penalty: repeatPenalty,
-                                grammar: JSON_GBNF,
-                            }),
-                            signal: controller.signal,
+                    const messages = [
+                        { role: "system", content: finalSystemPrompt },
+                        { role: "user", content: finalUserPrompt }
+                    ];
+                    
+                    const { resultText, tokenCount } = await streamLlamaCompletion({
+                        port,
+                        model: builtInModel || "local-model",
+                        messages,
+                        temperature,
+                        maxTokens,
+                        topP,
+                        topK,
+                        repeatPenalty,
+                        grammar: JSON_GBNF,
+                        signal: controller.signal,
+                        onFirstToken: () => {
+                            firstTokenTime = performance.now() - startTime;
+                            setTimeToFirstToken(Math.round(firstTokenTime));
                         },
-                    );
-
-                    if (!response.ok) {
-                        throw new Error(`Llama Server returned ${response.status}`);
-                    }
-
-                    if (!response.body) throw new Error("No response body");
-
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
-                    let resultText = "";
-                    let tokenCount = 0;
-
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-
-                        const chunk = decoder.decode(value, { stream: true });
-                        const lines = chunk.split("\n");
-
-                        for (const line of lines) {
-                            const trimmedLine = line.trim();
-                            if (
-                                trimmedLine.startsWith("data: ") &&
-                                trimmedLine !== "data: [DONE]"
-                            ) {
-                                try {
-                                    const data = JSON.parse(trimmedLine.slice(6));
-                                    const token =
-                                        data.choices[0]?.delta?.content || "";
-                                    if (token) {
-                                        if (tokenCount === 0) {
-                                            firstTokenTime =
-                                                performance.now() - startTime;
-                                            setTimeToFirstToken(
-                                                Math.round(firstTokenTime),
-                                            );
-                                        }
-                                        resultText += token;
-                                        setExtractedText((prev: string) => prev + token);
-                                        tokenCount++;
-                                    }
-                                } catch (e) {
-                                    // skip parse error
-                                }
-                            }
+                        onToken: (token) => {
+                            setExtractedText((prev: string) => prev + token);
                         }
-                    }
+                    });
 
                     setIsStreaming(false);
 
@@ -652,7 +603,7 @@ export default function Home() {
 
                     setIsExtracting(false);
                     navigate("/data");
-                    return; // 여기서 종료 — fetch 기반 흐름을 건너뜜
+                    return; // 여기서 종료
                 }
             } else if (provider === "ollama") {
                 // 3a. Ollama API로 전송 (기존 로직 유지)

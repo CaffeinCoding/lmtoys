@@ -35,8 +35,7 @@ export default function AppLayout() {
     setExtractionMode,
     setServerStatus,
     updateDownloadProgress,
-    setVisionResolution,
-    setMaxImages
+    setVisionResolution
   } = useAppStore();
 
   useEffect(() => {
@@ -87,9 +86,6 @@ export default function AppLayout() {
 
         const vRes = await store.get<number>("visionResolution");
         if (vRes) setVisionResolution(vRes);
-
-        const mImg = await store.get<number>("maxImages");
-        if (mImg) setMaxImages(mImg);
 
         const hf = await store.get<string>("hfToken");
         if (hf) setHfToken(hf);

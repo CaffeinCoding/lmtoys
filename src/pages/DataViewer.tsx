@@ -154,6 +154,24 @@ export default function DataViewer() {
               <FileText className="w-4 h-4 mr-2" />
               Export CSV
             </Button>
+            <Button 
+              variant="destructive" 
+              size="icon" 
+              onClick={clearData} 
+              title="Clear Current Data"
+              className="w-10 h-10"
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+            <Button 
+              variant="outline" 
+              size="icon" 
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
+              title="Toggle History"
+              className="w-10 h-10"
+            >
+              {isSidebarOpen ? <ChevronRight className="w-4 h-4" /> : <History className="w-4 h-4" />}
+            </Button>
           </div>
         </div>
 

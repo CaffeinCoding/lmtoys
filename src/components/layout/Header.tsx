@@ -36,7 +36,6 @@ export function Header() {
     promptText, setPromptText,
     customJsonFormat, setCustomJsonFormat,
     visionResolution, setVisionResolution,
-    maxImages, setMaxImages,
     provider, llmMode, cloudProvider,
     suggestNgl,
     isInitializing,
@@ -89,7 +88,6 @@ export function Header() {
           if (settings.promptText !== undefined) setPromptText(settings.promptText);
           if (settings.customJsonFormat !== undefined) setCustomJsonFormat(settings.customJsonFormat);
           if (settings.visionResolution !== undefined) setVisionResolution(settings.visionResolution);
-          if (settings.maxImages !== undefined) setMaxImages(settings.maxImages);
         }
         // Mark this path as loaded to allow saving
         lastLoadedPath.current = path;
@@ -98,7 +96,7 @@ export function Header() {
       }
     }
     loadModelSettings();
-  }, [getSettingFilePath, isInitializing, setTemperature, setMaxTokens, setTopP, setTopK, setRepeatPenalty, setNGpuLayers, setSystemPrompt, setPromptText, setCustomJsonFormat, setVisionResolution, setMaxImages]);
+  }, [getSettingFilePath, isInitializing, setTemperature, setMaxTokens, setTopP, setTopK, setRepeatPenalty, setNGpuLayers, setSystemPrompt, setPromptText, setCustomJsonFormat, setVisionResolution]);
 
   // Save settings when parameters change
   useEffect(() => {
@@ -123,8 +121,7 @@ export function Header() {
         systemPrompt,
         promptText,
         customJsonFormat,
-        visionResolution,
-        maxImages
+        visionResolution
       };
 
       try {
@@ -141,7 +138,7 @@ export function Header() {
 
     const timer = setTimeout(saveModelSettings, 500);
     return () => clearTimeout(timer);
-  }, [getSettingFilePath, isInitializing, temperature, maxTokens, topP, topK, repeatPenalty, nGpuLayers, systemPrompt, promptText, customJsonFormat, visionResolution, maxImages]);
+  }, [getSettingFilePath, isInitializing, temperature, maxTokens, topP, topK, repeatPenalty, nGpuLayers, systemPrompt, promptText, customJsonFormat, visionResolution]);
 
   useEffect(() => {
     const refresh = () => {

@@ -78,8 +78,6 @@ interface AppState {
   // Vision Settings
   visionResolution: number;
   setVisionResolution: (res: number) => void;
-  maxImages: number;
-  setMaxImages: (count: number) => void;
 
   // Llama Server State
   serverStatus: "offline" | "loading" | "running";
@@ -185,8 +183,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   visionResolution: 768,
   setVisionResolution: (res) => { set({ visionResolution: res }); get().saveToStore(); },
-  maxImages: 5,
-  setMaxImages: (count) => { set({ maxImages: count }); get().saveToStore(); },
 
   serverStatus: "offline",
   setServerStatus: (status) => set({ serverStatus: status }),
@@ -273,7 +269,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       await store.set("hfToken", state.hfToken);
       await store.set("extractionMode", state.extractionMode);
       await store.set("visionResolution", state.visionResolution);
-      await store.set("maxImages", state.maxImages);
       await store.save();
     } catch (e) {
       console.error("Failed to persist state", e);
