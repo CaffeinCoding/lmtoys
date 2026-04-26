@@ -1,84 +1,63 @@
 # 소프트웨어 아키텍처 명세서 (Architecture Specification)
 
-본 문서는 AI PDF Parser 데스크톱 애플리케이션의 소프트웨어 아키텍처 및 디렉터리 구조를 설명합니다.
+본 문서는 AI PDF Parser의 시스템 설계, 프로세스 관리 메커니즘 및 데이터 흐름을 상세히 설명합니다.
 
-## 1. 시스템 아키텍처 개요 (2-Layer 아키텍처)
+## 1. 2-Layer 프로세스 아키텍처
 
-AI PDF Parser는 **Tauri 프레임워크**를 사용하여 프론트엔드(React)와 백엔드(Rust)가 결합된 구조를 가지며, 로컬 LLM 추론을 위해 **Subprocess(llama-server.exe)**를 직접 관리하는 **2-Layer 아키텍처**를 채택하고 있습니다.
+AI PDF Parser는 UI/비즈니스 로직을 담당하는 **Tauri 기반 메인 앱**과 LLM 추론을 담당하는 **`llama-server` 서브 프로세스**로 구성된 2-Layer 구조를 채택합니다.
+
+### 1.1 서브 프로세스 격리 및 제어
+- **Windows Job Object**: `llm_runner.rs`는 Windows API를 사용하여 전용 Job Object를 생성합니다. 메인 앱(Tauri) 프로세스가 예기치 않게 종료되더라도, OS 수준에서 `llama-server` 프로세스를 즉시 강제 종료하여 VRAM 및 CPU 리소스 유실을 완벽히 방지합니다.
+- **리소스 경로 해결**: 앱 실행 시 `app_handle.path().resolve()`를 통해 실행 환경(Dev/Prod)에 맞는 바이너리 경로를 동적으로 탐색하며, 실패 시 3단계의 Fallback 경로(ResourceDir -> CurrentDir -> SrcTauriDir)를 순차적으로 확인합니다.
+
+## 2. Vision 멀티모달 파이프라인
+
+Vision 모드 활성화 시, 시스템은 텍스트 기반 추출과는 다른 정교한 시퀀셜 파이프라인을 가동합니다.
 
 ```mermaid
 graph TD
-    subgraph Frontend (React 19 / Vite)
-        UI[UI Components / Shadcn]
-        State[Zustand Store]
-        TauriAPI[Tauri API / invoke, listen]
-    end
-
-    subgraph Backend (Rust / Tauri v2)
-        Runner[LLM Runner / Subprocess Manager]
-        Sys[System Monitor / sysinfo, nvidia-smi]
-        PDF[PDF Extractor / pdf_extract]
-        FS[Persistence / settings.json]
-    end
-
-    subgraph "External Engine"
-        Server["llama-server.exe (Child Process)"]
-    end
-
-    UI <--> State
-    State <--> TauriAPI
-    TauriAPI <-->|IPC| Runner
-    Runner -->|spawn / stdin,stdout| Server
-    TauriAPI <-->|HTTP / fetch| Server
-    Runner --> Sys
-    Runner --> PDF
-    Runner --> FS
+    A[PDF 파일 선택] --> B{추출 모드 확인}
+    B -- Text --> C[Rust: pdf_extract 호출]
+    B -- Vision --> D[PDF.js: 페이지별 이미지 렌더링]
+    D --> E[Base64 변환]
+    E --> F[LLM 추론: Vision Projector 로드]
+    F --> G[GBNF 문법: JSON 구조 강제]
+    G --> H[결과 병합 및 Data Viewer 이동]
 ```
 
-## 2. 프론트엔드 아키텍처 (Frontend)
+### 2.1 GBNF (Grammar-Based Native Formats)
+- 추출 결과의 일관성을 위해 GBNF 문법을 사용합니다. 이는 LLM이 응답 시 사전에 정의된 JSON 스키마를 100% 준수하도록 강제하여 파싱 에러를 근본적으로 차단합니다.
 
-### 핵심 레이어
-1. **상태 관리 (Zustand)**: `src/store/useAppStore.ts`
-   - 앱의 모든 설정(모드, 파라미터, 모델 경로)과 데이터 추출 이력(`extractionHistory`)을 관리합니다.
-   - `isInitializing` 가드를 통해 앱 시작 시 설정 유실을 방지합니다.
+## 3. 데이터 영속성 및 설정 관리
 
-2. **UI 엔진**: React 19 + TailwindCSS + Shadcn/UI
-   - **Main Panel**: PDF 뷰어 및 실시간 텍스트 추출 스트리밍 표시.
-   - **Control Panel**: 런타임 설정, 모델 선택, 파라미터(Temp, P, K, NGL) 제어.
-   - **Data Viewer**: TanStack Table을 이용한 추출 결과 시각화 및 히스토리 사이드바.
+### 3.1 계층적 설정 스택
+시스템은 사용자의 편의성을 위해 설정을 두 가지 계층으로 관리합니다.
 
-## 3. 백엔드 아키텍처 (Backend)
+1.  **전역 설정 (Global Settings)**: `settings.json`에 저장되는 기본 UI 테마, 다운로드 경로, 서버 포트 등.
+2.  **모델별 설정 (Per-Model Settings)**: 특정 모델(`{model_name}_setting.json`) 전용 스냅샷. 사용자가 모델을 변경할 때 해당 모델에 최적화된 Temperature, NGL, 프롬프트 등이 즉시 오버라이드됩니다.
 
-### 핵심 모듈
-1. **LLM Runner (`src-tauri/src/llm_runner.rs`)**:
-   - `llama-server.exe`의 생명주기를 관리합니다.
-   - **Windows Job Object**: 부모 프로세스 종료 시 자식 프로세스를 자동 정리하여 VRAM 누수를 방지합니다.
-   - **Health Polling**: 서버 구동 시 네트워크 포트를 감시하여 즉각적인 'Running' 상태 전환을 지원합니다.
+### 3.2 상태 복원 가드 (`isInitializing`)
+- 앱 시작 시 `Zustand` 스토어와 `Tauri Store` 간의 동기화 과정에서 초기 설정이 기본값으로 덮어씌워지는 것을 방지하기 위해 `isInitializing` 플래그를 사용합니다. 동기화가 완료된 후에만 영속성 쓰기 작업이 허용됩니다.
 
-2. **모델 스캔 및 관리 (`src-tauri/src/lib.rs`)**:
-   - **계층적 구조**: `{다운로드 경로}/{owner}/{repo}/{filename}` 구조의 재귀적 스캔을 지원합니다.
-   - **멀티모달 자동 감지**: 모델 폴더 내 `mmproj.gguf` 파일 존재 여부로 Vision 기능을 식별합니다.
+## 4. 리소스 모니터링 체계
 
-3. **시스템 모니터링**:
-   - `sysinfo`를 통한 RAM 모니터링 및 `nvidia-smi` 쿼리를 통한 GPU VRAM 실시간 추적.
+- **CPU/RAM**: `sysinfo` 라이브러리를 통해 1초 단위로 시스템 부하를 모니터링합니다.
+- **GPU (VRAM)**: NVIDIA 환경의 경우 `nvidia-smi --query-gpu` 명령어를 서브 프로세스로 호출하여 실시간 사용량을 획득합니다. 획득된 데이터는 하단 `GlobalStatusBar`를 통해 사용자에게 즉각 피드백됩니다.
 
-## 4. 모델 저장 구조 (Storage Structure)
+## 5. 프로젝트 구조
 
 ```text
-{model_download_path}/
-├── unsloth/
-│   └── gemma-4-E2B-it-GGUF/
-│       ├── gemma-4-E2B-it-Q4_K_M.gguf          # 메인 모델 파일
-│       ├── gemma-4-E2B-it-Q4_K_M.gguf_setting.json # 모델별 맞춤 설정
-│       └── mmproj.gguf                         # (있을 경우) 시각 프로젝터
-└── settings.json                               # 전역 환경설정 및 추출 이력
-```
+src/
+├── api/             # HTTP 기반 LLM 스트리밍 API
+├── components/      # UI 컴포넌트 (Shadcn UI)
+├── pages/           # 화면 단위 컴포넌트 (Home, Viewer, Settings)
+├── store/           # Zustand 기반 상태 관리 및 영속성 로직
+└── lib/             # 유틸리티 함수 (JSON 추출, 하이라이팅 등)
 
-## 5. 실행 환경 (Subprocess Binaries)
-
-```text
-src-tauri/resources/bin/
-├── cpu/       # CPU 전용 llama-server 및 필수 DLL
-├── vulkan/    # Vulkan 가속용 바이너리
-└── cuda12/    # CUDA 12 전용 바이너리 (cuBLAS 포함)
+src-tauri/
+├── src/
+│   ├── main.rs      # 진입점
+│   ├── lib.rs       # 주요 IPC 핸들러
+│   └── llm_runner.rs # llama-server 제어 및 Job Object 관리
+└── resources/bin/   # 런타임별(cpu, vulkan, cuda12) 바이너리 저장소
 ```
