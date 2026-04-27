@@ -35,7 +35,8 @@ export default function AppLayout() {
     setExtractionMode,
     setServerStatus,
     updateDownloadProgress,
-    setVisionResolution
+    setVisionResolution,
+    setIsCudaAvailable
   } = useAppStore();
 
   useEffect(() => {
@@ -64,7 +65,15 @@ export default function AppLayout() {
         const { load } = await import("@tauri-apps/plugin-store");
         const store = await load("settings.json");
         
-        // 0. Sync Llama Server Status
+        // 0. Sync Llama Server Status and Cuda availability
+        try {
+          const isCuda = await invoke<boolean>("check_cuda_availability");
+          setIsCudaAvailable(isCuda);
+        } catch (e) {
+          console.error("Failed to check cuda availability", e);
+          setIsCudaAvailable(false);
+        }
+
         try {
           const status = await invoke<string>("get_llama_server_status");
           if (status === "running") {

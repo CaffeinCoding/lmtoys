@@ -89,6 +89,8 @@ interface AppState {
   clearServerLogs: () => void;
 
   // Inference Telemetry & Streaming State
+  isCudaAvailable: boolean | null;
+  setIsCudaAvailable: (val: boolean) => void;
   isStreaming: boolean;
   setIsStreaming: (streaming: boolean) => void;
   extractedText: string;
@@ -191,6 +193,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   serverLogs: [],
   addServerLog: (log) => set((state) => ({ serverLogs: [...state.serverLogs, log].slice(-1000) })), // keep last 1000 logs
   clearServerLogs: () => set({ serverLogs: [] }),
+
+  isCudaAvailable: null,
+  setIsCudaAvailable: (val) => set({ isCudaAvailable: val }),
 
   isStreaming: false,
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),

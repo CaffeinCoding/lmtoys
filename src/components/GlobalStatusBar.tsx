@@ -34,7 +34,7 @@ export function GlobalStatusBar() {
         setSysMemory(mem);
         
         const vram = await invoke<{ total: number; used: number } | null>("get_system_vram");
-        if (vram) setSysVram(vram);
+        setSysVram(vram);
         
         errorCount.current = 0; // 성공 시 카운트 초기화
       } catch (err) {

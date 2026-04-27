@@ -56,6 +56,42 @@ fn get_system_memory() -> serde_json::Value {
 }
 
 #[tauri::command]
+fn check_cuda_availability() -> bool {
+    use std::process::Command;
+
+    let mut nv_smi = Command::new("nvidia-smi");
+    
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        nv_smi.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    if let Ok(output) = nv_smi.output() {
+        if output.status.success() {
+            return true;
+        }
+    }
+
+    let mut nvcc = Command::new("nvcc");
+    nvcc.arg("--version");
+    
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        nvcc.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    if let Ok(output) = nvcc.output() {
+        if output.status.success() {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[tauri::command]
 fn get_system_vram() -> serde_json::Value {
     use std::process::Command;
     
@@ -389,6 +425,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet, 
             get_system_memory,
+            check_cuda_availability,
             get_system_vram,
             extract_pdf_text,
             download_model,

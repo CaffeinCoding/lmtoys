@@ -43,7 +43,8 @@ export default function Settings() {
     topK, setTopK,
     systemPrompt, setSystemPrompt,
     promptText, setPromptText,
-    visionResolution, setVisionResolution
+    visionResolution, setVisionResolution,
+    isCudaAvailable
   } = useAppStore();
   const [downloadedModels, setDownloadedModels] = useState<ModelInfo[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<{ [key: string]: number }>({});
@@ -448,11 +449,16 @@ export default function Settings() {
                       onChange={(e) => setSelectedRuntime(e.target.value as any)}
                       className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
                     >
-                      {supportedRuntimes.map((rt) => (
-                        <option key={rt} value={rt}>
-                          {{ cpu: "CPU Only (Default)", vulkan: "Vulkan (AMD/Intel/NVIDIA)", cuda: "CUDA (NVIDIA)", cuda12: "CUDA 12 (NVIDIA)" }[rt] ?? rt}
-                        </option>
-                      ))}
+                      {supportedRuntimes.map((rt) => {
+                        const isDisabled = rt === 'cuda12' && isCudaAvailable === false;
+                        const labels: Record<string, string> = { cpu: "CPU Only (Default)", vulkan: "Vulkan (AMD/Intel/NVIDIA)", cuda: "CUDA (NVIDIA)", cuda12: "CUDA 12 (NVIDIA)" };
+                        const label = labels[rt] ?? rt;
+                        return (
+                          <option key={rt} value={rt} disabled={isDisabled}>
+                            {label}{isDisabled ? " - 해당 환경에서는 지원하지 않습니다" : ""}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 </div>
