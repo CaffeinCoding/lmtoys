@@ -59,9 +59,16 @@ fn get_system_memory() -> serde_json::Value {
 fn get_system_vram() -> serde_json::Value {
     use std::process::Command;
     
-    if let Ok(output) = Command::new("nvidia-smi")
-        .args(&["--query-gpu=memory.total,memory.used", "--format=csv,noheader,nounits"])
-        .output() 
+    let mut cmd = Command::new("nvidia-smi");
+    cmd.args(&["--query-gpu=memory.total,memory.used", "--format=csv,noheader,nounits"]);
+    
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    if let Ok(output) = cmd.output() 
     {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);

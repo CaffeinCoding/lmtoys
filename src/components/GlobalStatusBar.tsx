@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "@/store/useAppStore";
 import { Loader2 } from "lucide-react";
@@ -10,32 +10,49 @@ import { Loader2 } from "lucide-react";
  * - RAM / VRAM 폴링, 선택 런타임, TTFT & TPS 표시
  */
 export function GlobalStatusBar() {
-  const {
-    builtInModel,
-    selectedRuntime,
-    serverStatus,
-    serverPort,
-    timeToFirstToken,
-    tokensPerSecond,
-    sysMemory, setSysMemory,
-    sysVram, setSysVram,
-  } = useAppStore();
+  // 개별 셀렉터를 사용하여 불필요한 리렌더링 방지
+  const builtInModel = useAppStore(state => state.builtInModel);
+  const selectedRuntime = useAppStore(state => state.selectedRuntime);
+  const serverStatus = useAppStore(state => state.serverStatus);
+  const serverPort = useAppStore(state => state.serverPort);
+  const timeToFirstToken = useAppStore(state => state.timeToFirstToken);
+  const tokensPerSecond = useAppStore(state => state.tokensPerSecond);
+  const sysMemory = useAppStore(state => state.sysMemory);
+  const setSysMemory = useAppStore(state => state.setSysMemory);
+  const sysVram = useAppStore(state => state.sysVram);
+  const setSysVram = useAppStore(state => state.setSysVram);
+
+  const errorCount = useRef(0);
+  const MAX_ERRORS = 5;
 
   useEffect(() => {
+    let intervalId: any;
+
     const poll = async () => {
       try {
         const mem = await invoke<{ total: number; used: number }>("get_system_memory");
         setSysMemory(mem);
+        
         const vram = await invoke<{ total: number; used: number } | null>("get_system_vram");
         if (vram) setSysVram(vram);
+        
+        errorCount.current = 0; // 성공 시 카운트 초기화
       } catch (err) {
-        console.error("Failed to poll system resources", err);
+        errorCount.current += 1;
+        console.error(`Failed to poll system resources (Attempt ${errorCount.current}/${MAX_ERRORS})`, err);
+        
+        if (errorCount.current >= MAX_ERRORS) {
+          console.error("Stopping resource polling due to repeated failures. Please check the backend.");
+          if (intervalId) clearInterval(intervalId);
+        }
       }
     };
 
     poll();
-    const interval = setInterval(poll, 3000);
-    return () => clearInterval(interval);
+    intervalId = setInterval(poll, 3000);
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
   }, [setSysMemory, setSysVram]);
 
   const runtimeLabel: Record<string, string> = {
