@@ -27,6 +27,7 @@ dist-ssr
 # Taurus
 src-tauri/binaries
 src-tauri/target
+src-tauri/resources
 
 # Projects
 .env
