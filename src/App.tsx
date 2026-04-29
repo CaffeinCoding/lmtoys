@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "@/components/theme-provider";
 import AppLayout from "@/components/layout/AppLayout";
 import Home from "@/pages/Home";
+import PdfAnalysis from "@/pages/PdfAnalysis";
+import ImageAnalysis from "@/pages/ImageAnalysis";
 import DataViewer from "@/pages/DataViewer";
 import Settings from "@/pages/Settings";
 
@@ -12,6 +14,8 @@ function App() {
         <Routes>
           <Route path="/" element={<AppLayout />}>
             <Route index element={<Home />} />
+            <Route path="pdf-analysis" element={<PdfAnalysis />} />
+            <Route path="image-analysis" element={<ImageAnalysis />} />
             <Route path="data" element={<DataViewer />} />
             <Route path="settings" element={<Settings />} />
           </Route>

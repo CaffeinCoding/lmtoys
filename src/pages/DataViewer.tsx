@@ -2,18 +2,28 @@ import { useState, useMemo } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import * as XLSX from "xlsx";
-import { Trash2, FileSpreadsheet, FileText, History, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Cpu, Zap, Gauge, Database } from "lucide-react";
+import { Trash2, FileSpreadsheet, FileText, History, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Cpu, Zap, Gauge, Database, Table as TableIcon, Code, ImageIcon } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+
+import Lightbox from "yet-another-react-lightbox";
+import Zoom from "yet-another-react-lightbox/plugins/zoom";
+import Thumbnails from "yet-another-react-lightbox/plugins/thumbnails";
+import "yet-another-react-lightbox/styles.css";
+import "yet-another-react-lightbox/plugins/thumbnails.css";
 
 export default function DataViewer() {
   const { extractedData, setExtractedData, extractionHistory, removeHistoryItem, extractedText } = useAppStore();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMetadataOpen, setIsMetadataOpen] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   // Find the selected history item to show its metadata
   const selectedHistoryItem = useMemo(() => {
@@ -58,6 +68,16 @@ export default function DataViewer() {
     return data;
   }, [extractedData, extractionHistory]);
 
+  const allColumns = useMemo(() => {
+    const keys = new Set<string>();
+    displayData.forEach(row => {
+      if (row && typeof row === 'object') {
+        Object.keys(row).forEach(key => keys.add(key));
+      }
+    });
+    return Array.from(keys);
+  }, [displayData]);
+
   const exportToExcel = async () => {
     try {
       const ws = XLSX.utils.json_to_sheet(displayData);
@@ -83,17 +103,9 @@ export default function DataViewer() {
     try {
       if (displayData.length === 0) return;
       
-      const allKeysSet = new Set<string>();
-      displayData.forEach(row => {
-        if (row && typeof row === 'object') {
-          Object.keys(row).forEach(key => allKeysSet.add(key));
-        }
-      });
-      const keys = Array.from(allKeysSet);
-      
-      const header = keys.join(",");
+      const header = allColumns.join(",");
       const rows = displayData.map(obj => 
-        keys.map(key => {
+        allColumns.map(key => {
           let val = obj[key] === null || obj[key] === undefined ? "" : obj[key];
           if (typeof val === 'object') val = JSON.stringify(val);
           let strVal = String(val);
@@ -123,6 +135,21 @@ export default function DataViewer() {
     setExtractedData(null);
   };
 
+  const isImageFile = (val: string) => {
+    const lower = val.toLowerCase();
+    return lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.webp');
+  };
+
+  const handleImageClick = (filename: string) => {
+    const folder = (selectedHistoryItem?.config as any)?.imageFolderPath;
+    if (folder) {
+      setPreviewImage(convertFileSrc(`${folder}\\${filename}`));
+    } else {
+      // Try to use it as absolute path just in case
+      setPreviewImage(convertFileSrc(filename));
+    }
+  };
+
   return (
     <div className="flex h-full w-full overflow-hidden">
       {/* Main Content */}
@@ -131,7 +158,7 @@ export default function DataViewer() {
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Data Dashboard</h1>
             <p className="text-muted-foreground mt-1">
-              View and export extracted data from PDFs.
+              View and export extracted data from analysis.
             </p>
           </div>
           
@@ -189,7 +216,9 @@ export default function DataViewer() {
                 </div>
                 <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                   <Badge variant="outline" className="font-normal">Temp: {selectedHistoryItem.config.temperature}</Badge>
-                  <Badge variant="outline" className="font-normal">NGL: {selectedHistoryItem.config.nGpuLayers}</Badge>
+                  {selectedHistoryItem.config.nGpuLayers !== undefined && (
+                    <Badge variant="outline" className="font-normal">NGL: {selectedHistoryItem.config.nGpuLayers}</Badge>
+                  )}
                   <Badge variant="secondary" className="font-normal ml-2">{selectedHistoryItem.config.llmMode.toUpperCase()}</Badge>
                   
                   {selectedHistoryItem.config.runtime && (
@@ -250,29 +279,74 @@ export default function DataViewer() {
         )}
 
         <Card className="flex-1 flex flex-col overflow-hidden min-h-0">
-          <CardHeader className="py-4 border-b shrink-0 flex flex-row items-center justify-between">
-            <div>
-              <CardTitle>LLM Raw Response</CardTitle>
-              <CardDescription>The original text generated by the model before parsing.</CardDescription>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => setIsSidebarOpen(!isSidebarOpen)} title="Toggle History">
-                {isSidebarOpen ? <ChevronRight className="w-4 h-4 mr-2" /> : <History className="w-4 h-4 mr-2" />}
-                {isSidebarOpen ? "Hide History" : "Show History"}
-              </Button>
-              <Button variant="destructive" size="sm" onClick={clearData} title="Clear Current Data">
-                <Trash2 className="w-4 h-4 mr-2" />
-                Clear
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="flex-1 overflow-hidden p-0 relative bg-muted/10 font-mono text-xs">
-            <ScrollArea className="h-full w-full">
-              <div className="p-6 whitespace-pre-wrap leading-relaxed">
-                {selectedHistoryItem?.config?.rawResponse || extractedText || "No raw response data available."}
-              </div>
-            </ScrollArea>
-          </CardContent>
+          <Tabs defaultValue="table" className="flex-1 flex flex-col min-h-0">
+            <CardHeader className="py-3 border-b shrink-0 flex flex-row items-center justify-between bg-muted/5">
+              <TabsList className="grid w-[300px] grid-cols-2">
+                <TabsTrigger value="table" className="flex items-center gap-2">
+                  <TableIcon className="w-4 h-4" /> Table View
+                </TabsTrigger>
+                <TabsTrigger value="raw" className="flex items-center gap-2">
+                  <Code className="w-4 h-4" /> Raw Response
+                </TabsTrigger>
+              </TabsList>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-hidden p-0 relative">
+              <TabsContent value="table" className="m-0 h-full w-full">
+                <ScrollArea className="h-full w-full">
+                  {displayData.length > 0 ? (
+                    <Table>
+                      <TableHeader className="sticky top-0 bg-background z-10 shadow-sm">
+                        <TableRow>
+                          {allColumns.map((col) => (
+                            <TableHead key={col} className="font-bold">{col}</TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {displayData.map((row, i) => (
+                          <TableRow key={i}>
+                            {allColumns.map((col) => {
+                              const val = row[col];
+                              const strVal = typeof val === 'object' ? JSON.stringify(val) : String(val ?? '');
+                              const isImage = typeof val === 'string' && isImageFile(val);
+
+                              return (
+                                <TableCell key={col} className="max-w-[300px] truncate" title={strVal}>
+                                  {isImage ? (
+                                    <span 
+                                      className="text-primary hover:underline cursor-pointer flex items-center gap-1"
+                                      onClick={() => handleImageClick(val)}
+                                    >
+                                      <ImageIcon className="w-3 h-3" />
+                                      {val}
+                                    </span>
+                                  ) : (
+                                    strVal
+                                  )}
+                                </TableCell>
+                              );
+                            })}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  ) : (
+                    <div className="flex items-center justify-center h-full text-muted-foreground">
+                      No tabular data available.
+                    </div>
+                  )}
+                </ScrollArea>
+              </TabsContent>
+              
+              <TabsContent value="raw" className="m-0 h-full w-full bg-muted/10 font-mono text-xs">
+                <ScrollArea className="h-full w-full">
+                  <div className="p-6 whitespace-pre-wrap leading-relaxed">
+                    {selectedHistoryItem?.config?.rawResponse || extractedText || "No raw response data available."}
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+            </CardContent>
+          </Tabs>
         </Card>
       </div>
 
@@ -332,6 +406,13 @@ export default function DataViewer() {
           </div>
         </ScrollArea>
       </aside>
+
+      <Lightbox
+        open={previewImage !== null}
+        close={() => setPreviewImage(null)}
+        slides={previewImage ? [{ src: previewImage }] : []}
+        plugins={[Zoom, Thumbnails]}
+      />
     </div>
   );
 }

@@ -1,4 +1,22 @@
 # 프로젝트 테스트 중 발생한 이슈사항 모음
 
-- 현재 gpu 메모리 사용량을 'nvidia-smi' 명령어로 읽어오고 있는데, intel, amd 내장 그래픽을 사용하거나 amd 그래픽카드를 사용하거나 기타 다른 환경의 그래픽 가속기를 사용하는 경우에 대한 처리가 필요해.
-    - 일단 nvidia-smi로 vram 사용량을 읽을 수 없는 경우 vram 사용량을 읽을 수 없다고 표시해줘.
+- 이미지 분석 페이지 이미지 목록 아이템의 체크박스와 'Maximize2' 아이콘 버튼에 반응형 디자인 적용 필요.
+- 'ExtractionConfigPanel'에 'Max Tokens', 'GPU Layers (NGL)' 항목 제거
+    - 해당 설정들은 llama-server를 시작할때 필요한 설정이므로 llama-server를 시작한 이후에 설정 변경이 불가능.
+- 이미지 분석 페이지에서 다른 페이지로 이동했다가 돌아오면 open한 폴더가 초기화되는 문제 발생.
+    - 다른 페이지로 이동했다가 돌아와도 open한 폴더와 이미지가 유지되도록 수정 필요.
+- 설정페이지의 modelConfig 탭과 Header의 Params popover의 파라미터 input의 type이 number로 인해 focus 상태로 값을 변경 중일때 0이 앞에 붙는 문제가 발생.
+    - 정규식을 활용해 맨앞에 '0'을 제거하는 src/utils 폴더에 'removeLeadingZeros' 함수를 제작하여 해결 진행.
+    - (참고) 소수점도 대응 가능하도록 설계.
+- 설정 페이지 Model Config 탭의 Default 값들이 현재 선택 llm 모델의 값으로 바뀌는 문제 발생.
+- vision 모드로 추출을 진행 중 중단할 경우 progress 상태가 진행 중인 상태로 표시되고 있어.
+    - 중단 버튼 클릭으로 진행을 중단할 경우 'Stoping...' 이후 'Stopped' 메시지 표시.
+- Data Viewer 페이지에서 다른 페이지를 이동했다가 다시 Data Viewer 페이지에서 확인해보면 Raw Response가 'No raw response data available.'로 표시되고 있어.
+    - pdf 추출의 'text', 'vision' 모두 Raw Response가 표시될 수 있도록 고쳐줘.
+    - 이미지 분석의 'vision'도 Raw Response가 표시될 수 있도록 고쳐줘.
+- 이미지 분석 기능을 통한 결과에서 분석 당시의 파라미터 데이터가 없어.
+    - 분석 당시의 프롬프트와 파라미터가 표시되도록 수정 필요.
+- 이미지 분석 기능을 통한 결과에서 분석 당시의 런타임이 표시되지 않고 있어.
+    - 원래 표시되어야되는 런타임대신 'LLAMASERVER'라고 표시되고 있어.
+- 같은 모델을 사용하더라도 pdf 추출 기능과 이미지 분석 기능의 파라미터, system prompt, user prompt의 값을 다르게 사용하고 싶어.
+    - 설정을 저장하는 json 파일의 구조 개선이 필요.

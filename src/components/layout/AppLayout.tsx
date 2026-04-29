@@ -1,16 +1,17 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { FileText, Database, Settings as SettingsIcon, Moon, Sun, Monitor } from "lucide-react";
+import { FileText, Database, Settings as SettingsIcon, Moon, Sun, Monitor, Image as ImageIcon, ChevronDown, ChevronUp, Home as HomeIcon, LayoutDashboard } from "lucide-react";
 import { useTheme } from "../theme-provider";
 import { Button } from "../ui/button";
 import { GlobalStatusBar } from "../GlobalStatusBar";
 import { Header } from "./Header";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { invoke } from "@tauri-apps/api/core";
 
 export default function AppLayout() {
   const { pathname } = useLocation();
   const { theme, setTheme } = useTheme();
+  const [isAnalysisOpen, setIsAnalysisOpen] = useState(true);
   
   const { 
     setModelDownloadPath, 
@@ -183,14 +184,7 @@ export default function AppLayout() {
     initGlobalSettings();
   }, [setModelDownloadPath, setHfToken, setServerPort, setSelectedRuntime, setIsInitializing]);
 
-  const navItems = [
-    { name: "Home", path: "/", icon: <FileText size={20} /> },
-    { name: "Data", path: "/data", icon: <Database size={20} /> },
-    { name: "Settings", path: "/settings", icon: <SettingsIcon size={20} /> },
-  ];
-
   return (
-    // 전체 뷰포트를 column flex로 구성하여 StatusBar가 항상 맨 아래에 위치하도록 합니다.
     <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden">
       {/* Top area: sidebar + main content */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -198,26 +192,82 @@ export default function AppLayout() {
         <aside className="w-64 border-r bg-card flex flex-col shrink-0">
           <div className="p-6">
             <h2 className="text-xl font-bold flex items-center gap-2">
-              <FileText className="text-primary" />
-              PDF Parser
+              <LayoutDashboard className="text-primary" />
+              LLM Toys
             </h2>
           </div>
 
-          <nav className="flex-1 px-4 space-y-2">
-            {navItems.map((item) => (
-              <Link key={item.path} to={item.path}>
-                <Button
-                  variant={pathname === item.path ? "secondary" : "ghost"}
-                  className="w-full justify-start gap-3 mb-1"
-                >
-                  {item.icon}
-                  {item.name}
-                </Button>
-              </Link>
-            ))}
+          <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
+            <Link to="/">
+              <Button
+                variant={pathname === "/" ? "secondary" : "ghost"}
+                className="w-full justify-start gap-3"
+              >
+                <HomeIcon size={20} />
+                Home
+              </Button>
+            </Link>
+
+            <div className="pt-2">
+              <Button
+                variant="ghost"
+                className="w-full justify-between hover:bg-transparent px-3 py-2 text-sm font-semibold text-muted-foreground"
+                onClick={() => setIsAnalysisOpen(!isAnalysisOpen)}
+              >
+                <span>ANALYSIS</span>
+                {isAnalysisOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </Button>
+              
+              {isAnalysisOpen && (
+                <div className="pl-3 pr-0 space-y-1 mt-1 border-l-2 border-muted ml-2">
+                  <Link to="/pdf-analysis">
+                    <Button
+                      variant={pathname === "/pdf-analysis" ? "secondary" : "ghost"}
+                      className="w-full justify-start gap-3 h-9 text-sm"
+                    >
+                      <FileText size={18} />
+                      PDF Analysis
+                    </Button>
+                  </Link>
+                  <Link to="/image-analysis">
+                    <Button
+                      variant={pathname === "/image-analysis" ? "secondary" : "ghost"}
+                      className="w-full justify-start gap-3 h-9 text-sm"
+                    >
+                      <ImageIcon size={18} />
+                      Image Analysis
+                    </Button>
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-4">
+              <div className="px-3 py-2 text-sm font-semibold text-muted-foreground">SYSTEM</div>
+              <div className="space-y-1">
+                <Link to="/data">
+                  <Button
+                    variant={pathname === "/data" ? "secondary" : "ghost"}
+                    className="w-full justify-start gap-3"
+                  >
+                    <Database size={20} />
+                    Data Viewer
+                  </Button>
+                </Link>
+                <Link to="/settings">
+                  <Button
+                    variant={pathname === "/settings" ? "secondary" : "ghost"}
+                    className="w-full justify-start gap-3"
+                  >
+                    <SettingsIcon size={20} />
+                    Settings
+                  </Button>
+                </Link>
+              </div>
+            </div>
           </nav>
 
-          <div className="p-4 flex flex-col gap-4 border-t">
+          <div className="p-4 flex flex-col gap-4 border-t shrink-0">
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground font-medium">Theme</span>
               <div className="flex gap-1 bg-muted p-1 rounded-lg">
