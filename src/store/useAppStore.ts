@@ -11,9 +11,12 @@ interface ExtractionConfig {
   topK: number;
   repeatPenalty: number;
   nGpuLayers: number;
-  systemPrompt: string;
-  promptText: string;
-  customJsonFormat?: string;
+  pdfSystemPrompt?: string;
+  pdfPromptText?: string;
+  imageSystemPrompt?: string;
+  imagePromptText?: string;
+  pdfJsonFormat?: string;
+  imageJsonFormat?: string;
   rawResponse?: string;
   runtime?: string;
   ttft?: number | null;
@@ -23,6 +26,10 @@ interface ExtractionConfig {
 interface AppState {
   currentPdfPath: string | null;
   setCurrentPdfPath: (path: string | null) => void;
+  imageFolderPath: string | null;
+  setImageFolderPath: (path: string | null) => void;
+  selectedImages: string[];
+  setSelectedImages: (images: string[]) => void;
   extractedData: any[] | null;
   setExtractedData: (data: any[] | null) => void;
   
@@ -40,8 +47,10 @@ interface AppState {
   setLlmMode: (mode: "cloud" | "local") => void;
   cloudProvider: "openai" | "gemini" | "claude";
   setCloudProvider: (provider: "openai" | "gemini" | "claude") => void;
-  promptText: string;
-  setPromptText: (text: string) => void;
+  pdfPromptText: string;
+  setPdfPromptText: (text: string) => void;
+  imagePromptText: string;
+  setImagePromptText: (text: string) => void;
   provider: "ollama" | "lmstudio" | "builtin";
   setProvider: (provider: "ollama" | "lmstudio" | "builtin") => void;
   modelName: string;
@@ -53,6 +62,26 @@ interface AppState {
   hfToken: string | null;
   setHfToken: (token: string | null) => void;
   
+  // --- Global Default Settings (saved in settings.json) ---
+  defaultTemperature: number;
+  setDefaultTemperature: (temp: number) => void;
+  defaultMaxTokens: number;
+  setDefaultMaxTokens: (tokens: number) => void;
+  defaultTopK: number;
+  setDefaultTopK: (k: number) => void;
+  defaultTopP: number;
+  setDefaultTopP: (p: number) => void;
+  defaultRepeatPenalty: number;
+  setDefaultRepeatPenalty: (penalty: number) => void;
+  defaultPdfSystemPrompt: string;
+  setDefaultPdfSystemPrompt: (prompt: string) => void;
+  defaultImageSystemPrompt: string;
+  setDefaultImageSystemPrompt: (prompt: string) => void;
+  defaultPdfPromptText: string;
+  setDefaultPdfPromptText: (text: string) => void;
+  defaultImagePromptText: string;
+  setDefaultImagePromptText: (text: string) => void;
+
   // Model Parameters
   temperature: number;
   setTemperature: (temp: number) => void;
@@ -64,10 +93,14 @@ interface AppState {
   setTopP: (p: number) => void;
   
   // Advanced Settings
-  systemPrompt: string;
-  setSystemPrompt: (prompt: string) => void;
-  customJsonFormat: string;
-  setCustomJsonFormat: (format: string) => void;
+  pdfSystemPrompt: string;
+  setPdfSystemPrompt: (prompt: string) => void;
+  imageSystemPrompt: string;
+  setImageSystemPrompt: (prompt: string) => void;
+  pdfJsonFormat: string;
+  setPdfJsonFormat: (format: string) => void;
+  imageJsonFormat: string;
+  setImageJsonFormat: (format: string) => void;
   repeatPenalty: number;
   setRepeatPenalty: (penalty: number) => void;
   nGpuLayers: number;
@@ -127,6 +160,10 @@ interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   currentPdfPath: null,
   setCurrentPdfPath: (path) => set({ currentPdfPath: path, parsedPdfText: null }),
+  imageFolderPath: null,
+  setImageFolderPath: (path) => set({ imageFolderPath: path }),
+  selectedImages: [],
+  setSelectedImages: (images) => set({ selectedImages: images }),
   extractedData: null,
   setExtractedData: (data) => set({ extractedData: data }),
   parsedPdfText: null,
@@ -142,8 +179,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setLlmMode: (mode) => { set({ llmMode: mode }); get().saveToStore(); },
   cloudProvider: "openai",
   setCloudProvider: (provider) => { set({ cloudProvider: provider }); get().saveToStore(); },
-  promptText: "Extract all key entities and present them as a JSON array.",
-  setPromptText: (text) => { set({ promptText: text }); get().saveToStore(); },
   provider: "ollama",
   setProvider: (provider) => { set({ provider }); get().saveToStore(); },
   modelName: "llama3",
@@ -163,21 +198,49 @@ export const useAppStore = create<AppState>((set, get) => ({
   hfToken: null,
   setHfToken: (token) => { set({ hfToken: token }); get().saveToStore(); },
   
+  // --- Global Default Settings ---
+  defaultTemperature: 0.1,
+  setDefaultTemperature: (temp) => { set({ defaultTemperature: temp }); get().saveToStore(); },
+  defaultMaxTokens: 4096,
+  setDefaultMaxTokens: (tokens) => { set({ defaultMaxTokens: tokens }); get().saveToStore(); },
+  defaultTopK: 40,
+  setDefaultTopK: (k) => { set({ defaultTopK: k }); get().saveToStore(); },
+  defaultTopP: 0.9,
+  setDefaultTopP: (p) => { set({ defaultTopP: p }); get().saveToStore(); },
+  defaultRepeatPenalty: 1.1,
+  setDefaultRepeatPenalty: (penalty) => { set({ defaultRepeatPenalty: penalty }); get().saveToStore(); },
+  defaultPdfSystemPrompt: "You are a helpful and precise assistant. Extract information accurately and return ONLY the JSON data without any conversational filler or explanation.",
+  setDefaultPdfSystemPrompt: (prompt) => { set({ defaultPdfSystemPrompt: prompt }); get().saveToStore(); },
+  defaultImageSystemPrompt: "You are a helpful and precise assistant. Extract information accurately and return ONLY the JSON data without any conversational filler or explanation.",
+  setDefaultImageSystemPrompt: (prompt) => { set({ defaultImageSystemPrompt: prompt }); get().saveToStore(); },
+  defaultPdfPromptText: "Extract the data from this document and return it in the specified JSON format.",
+  setDefaultPdfPromptText: (text) => { set({ defaultPdfPromptText: text }); get().saveToStore(); },
+  defaultImagePromptText: "Extract the data from this image and return it in the specified JSON format.",
+  setDefaultImagePromptText: (text) => { set({ defaultImagePromptText: text }); get().saveToStore(); },
+
   temperature: 0.1,
-  setTemperature: (temp) => { set({ temperature: temp }); get().saveToStore(); },
+  setTemperature: (temp) => set({ temperature: temp }),
   maxTokens: 4096,
-  setMaxTokens: (tokens) => { set({ maxTokens: tokens }); get().saveToStore(); },
+  setMaxTokens: (tokens) => set({ maxTokens: tokens }),
   topK: 40,
-  setTopK: (k) => { set({ topK: k }); get().saveToStore(); },
+  setTopK: (k) => set({ topK: k }),
   topP: 0.9,
-  setTopP: (p) => { set({ topP: p }); get().saveToStore(); },
+  setTopP: (p) => set({ topP: p }),
   
-  systemPrompt: "You are a helpful and precise assistant. Extract information accurately and return ONLY the JSON data without any conversational filler or explanation.",
-  setSystemPrompt: (prompt) => { set({ systemPrompt: prompt }); get().saveToStore(); },
-  customJsonFormat: "[\n  {\n    \"key\": \"value\"\n  }\n]",
-  setCustomJsonFormat: (format) => { set({ customJsonFormat: format }); get().saveToStore(); },
+  pdfSystemPrompt: "You are a helpful and precise assistant. Extract information accurately and return ONLY the JSON data without any conversational filler or explanation.",
+  setPdfSystemPrompt: (prompt) => set({ pdfSystemPrompt: prompt }),
+  imageSystemPrompt: "You are a helpful and precise assistant. Extract information accurately and return ONLY the JSON data without any conversational filler or explanation.",
+  setImageSystemPrompt: (prompt) => set({ imageSystemPrompt: prompt }),
+  pdfJsonFormat: "",
+  setPdfJsonFormat: (format) => set({ pdfJsonFormat: format }),
+  imageJsonFormat: "",
+  setImageJsonFormat: (format) => set({ imageJsonFormat: format }),
+  pdfPromptText: "Extract the data from this document and return it in the specified JSON format.",
+  setPdfPromptText: (text) => set({ pdfPromptText: text }),
+  imagePromptText: "Extract the data from this image and return it in the specified JSON format.",
+  setImagePromptText: (text) => set({ imagePromptText: text }),
   repeatPenalty: 1.1,
-  setRepeatPenalty: (penalty) => { set({ repeatPenalty: penalty }); get().saveToStore(); },
+  setRepeatPenalty: (penalty) => set({ repeatPenalty: penalty }),
   nGpuLayers: 0, // Default to 0 (CPU)
   setNGpuLayers: (layers) => { set({ nGpuLayers: layers }); get().saveToStore(); },
   selectedRuntime: "cpu",
@@ -254,15 +317,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       const store = await load("settings.json");
       const state = get();
       await store.set("extractionHistory", state.extractionHistory);
-      await store.set("temperature", state.temperature);
-      await store.set("maxTokens", state.maxTokens);
-      await store.set("topP", state.topP);
-      await store.set("topK", state.topK);
-      await store.set("repeatPenalty", state.repeatPenalty);
+      await store.set("temperature", state.defaultTemperature);
+      await store.set("maxTokens", state.defaultMaxTokens);
+      await store.set("topP", state.defaultTopP);
+      await store.set("topK", state.defaultTopK);
+      await store.set("repeatPenalty", state.defaultRepeatPenalty);
       await store.set("nGpuLayers", state.nGpuLayers);
-      await store.set("systemPrompt", state.systemPrompt);
-      await store.set("promptText", state.promptText);
-      await store.set("customJsonFormat", state.customJsonFormat);
+      await store.set("pdfSystemPrompt", state.defaultPdfSystemPrompt);
+      await store.set("pdfPromptText", state.defaultPdfPromptText);
+      await store.set("imageSystemPrompt", state.defaultImageSystemPrompt);
+      await store.set("imagePromptText", state.defaultImagePromptText);
+      await store.set("pdfJsonFormat", state.pdfJsonFormat);
+      await store.set("imageJsonFormat", state.imageJsonFormat);
       await store.set("llmMode", state.llmMode);
       await store.set("cloudProvider", state.cloudProvider);
       await store.set("provider", state.provider);

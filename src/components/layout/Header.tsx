@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { writeFile, readTextFile, exists } from "@tauri-apps/plugin-fs";
 import { appDataDir } from "@tauri-apps/api/path";
 import { Progress } from "@/components/ui/progress";
-import { cn } from "@/lib/utils";
+import { cn, removeLeadingZeros } from "@/lib/utils";
 
 interface ModelInfo {
   name: string;
@@ -32,9 +32,12 @@ export function Header() {
     topP, setTopP,
     topK, setTopK,
     repeatPenalty, setRepeatPenalty,
-    systemPrompt, setSystemPrompt,
-    promptText, setPromptText,
-    customJsonFormat, setCustomJsonFormat,
+    pdfSystemPrompt, setPdfSystemPrompt,
+    imageSystemPrompt, setImageSystemPrompt,
+    pdfPromptText, setPdfPromptText,
+    imagePromptText, setImagePromptText,
+    pdfJsonFormat, setPdfJsonFormat,
+    imageJsonFormat, setImageJsonFormat,
     visionResolution, setVisionResolution,
     provider, llmMode, cloudProvider,
     suggestNgl,
@@ -84,9 +87,12 @@ export function Header() {
           if (settings.topK !== undefined) setTopK(settings.topK);
           if (settings.repeatPenalty !== undefined) setRepeatPenalty(settings.repeatPenalty);
           if (settings.nGpuLayers !== undefined) setNGpuLayers(settings.nGpuLayers);
-          if (settings.systemPrompt !== undefined) setSystemPrompt(settings.systemPrompt);
-          if (settings.promptText !== undefined) setPromptText(settings.promptText);
-          if (settings.customJsonFormat !== undefined) setCustomJsonFormat(settings.customJsonFormat);
+          if (settings.pdfSystemPrompt !== undefined) setPdfSystemPrompt(settings.pdfSystemPrompt);
+          if (settings.imageSystemPrompt !== undefined) setImageSystemPrompt(settings.imageSystemPrompt);
+          if (settings.pdfPromptText !== undefined) setPdfPromptText(settings.pdfPromptText);
+          if (settings.imagePromptText !== undefined) setImagePromptText(settings.imagePromptText);
+          if (settings.pdfJsonFormat !== undefined) setPdfJsonFormat(settings.pdfJsonFormat);
+          if (settings.imageJsonFormat !== undefined) setImageJsonFormat(settings.imageJsonFormat);
           if (settings.visionResolution !== undefined) setVisionResolution(settings.visionResolution);
         }
         // Mark this path as loaded to allow saving
@@ -96,7 +102,7 @@ export function Header() {
       }
     }
     loadModelSettings();
-  }, [getSettingFilePath, isInitializing, setTemperature, setMaxTokens, setTopP, setTopK, setRepeatPenalty, setNGpuLayers, setSystemPrompt, setPromptText, setCustomJsonFormat, setVisionResolution]);
+  }, [getSettingFilePath, isInitializing, setTemperature, setMaxTokens, setTopP, setTopK, setRepeatPenalty, setNGpuLayers, setPdfSystemPrompt, setImageSystemPrompt, setPdfPromptText, setImagePromptText, setPdfJsonFormat, setImageJsonFormat, setVisionResolution]);
 
   // Save settings when parameters change
   useEffect(() => {
@@ -118,9 +124,12 @@ export function Header() {
         topK,
         repeatPenalty,
         nGpuLayers,
-        systemPrompt,
-        promptText,
-        customJsonFormat,
+        pdfSystemPrompt,
+        imageSystemPrompt,
+        pdfPromptText,
+        imagePromptText,
+        pdfJsonFormat,
+        imageJsonFormat,
         visionResolution
       };
 
@@ -138,7 +147,7 @@ export function Header() {
 
     const timer = setTimeout(saveModelSettings, 500);
     return () => clearTimeout(timer);
-  }, [getSettingFilePath, isInitializing, temperature, maxTokens, topP, topK, repeatPenalty, nGpuLayers, systemPrompt, promptText, customJsonFormat, visionResolution]);
+  }, [getSettingFilePath, isInitializing, temperature, maxTokens, topP, topK, repeatPenalty, nGpuLayers, pdfSystemPrompt, imageSystemPrompt, pdfPromptText, imagePromptText, pdfJsonFormat, imageJsonFormat, visionResolution]);
 
   useEffect(() => {
     const refresh = () => {
@@ -385,7 +394,11 @@ export function Header() {
                     id="ctxSize"
                     type="number"
                     value={maxTokens}
-                    onChange={(e) => setMaxTokens(Number(e.target.value))}
+                    onChange={(e) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setMaxTokens(Number(cleaned));
+                    }}
                     className="col-span-2 h-8"
                     disabled={serverStatus !== "offline"}
                   />
@@ -396,7 +409,11 @@ export function Header() {
                     id="ngl"
                     type="number"
                     value={nGpuLayers}
-                    onChange={(e) => setNGpuLayers(Number(e.target.value))}
+                    onChange={(e) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setNGpuLayers(Number(cleaned));
+                    }}
                     className="col-span-2 h-8"
                     disabled={serverStatus !== "offline"}
                   />
@@ -408,7 +425,16 @@ export function Header() {
                     type="number"
                     step="0.1"
                     value={temperature}
-                    onChange={(e) => setTemperature(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "" || val === "0" || val === "0.") {
+                        setTemperature(Number(val));
+                      } else {
+                        const cleaned = removeLeadingZeros(val);
+                        e.target.value = cleaned;
+                        setTemperature(Number(cleaned));
+                      }
+                    }}
                     className="col-span-2 h-8"
                   />
                 </div>
@@ -419,7 +445,11 @@ export function Header() {
                     type="number"
                     step="0.1"
                     value={topP}
-                    onChange={(e) => setTopP(Number(e.target.value))}
+                    onChange={(e) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setTopP(Number(cleaned));
+                    }}
                     className="col-span-2 h-8"
                   />
                 </div>
@@ -429,7 +459,11 @@ export function Header() {
                     id="topK"
                     type="number"
                     value={topK}
-                    onChange={(e) => setTopK(Number(e.target.value))}
+                    onChange={(e) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setTopK(Number(cleaned));
+                    }}
                     className="col-span-2 h-8"
                   />
                 </div>
@@ -440,7 +474,11 @@ export function Header() {
                     type="number"
                     step="0.1"
                     value={repeatPenalty}
-                    onChange={(e) => setRepeatPenalty(Number(e.target.value))}
+                    onChange={(e) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setRepeatPenalty(Number(cleaned));
+                    }}
                     className="col-span-2 h-8"
                   />
                 </div>

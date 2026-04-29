@@ -5,7 +5,8 @@ import { listen } from "@tauri-apps/api/event";
 import { appDataDir } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useAppStore } from "@/store/useAppStore";
-import { Download, Trash2, FolderOpen, Eye, Square } from "lucide-react";
+import { removeLeadingZeros } from "@/lib/utils";
+import { Download, Trash2, FolderOpen, Eye, Square, FileText, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,12 +38,14 @@ export default function Settings() {
     selectedRuntime, setSelectedRuntime, 
     serverPort, setServerPort,
     updateDownloadProgress,
-    temperature, setTemperature,
-    maxTokens, setMaxTokens,
-    topP, setTopP,
-    topK, setTopK,
-    systemPrompt, setSystemPrompt,
-    promptText, setPromptText,
+    defaultTemperature: temperature, setDefaultTemperature: setTemperature,
+    defaultMaxTokens: maxTokens, setDefaultMaxTokens: setMaxTokens,
+    defaultTopP: topP, setDefaultTopP: setTopP,
+    defaultTopK: topK, setDefaultTopK: setTopK,
+    defaultPdfSystemPrompt: pdfSystemPrompt, setDefaultPdfSystemPrompt: setPdfSystemPrompt,
+    defaultImageSystemPrompt: imageSystemPrompt, setDefaultImageSystemPrompt: setImageSystemPrompt,
+    defaultPdfPromptText: pdfPromptText, setDefaultPdfPromptText: setPdfPromptText,
+    defaultImagePromptText: imagePromptText, setDefaultImagePromptText: setImagePromptText,
     visionResolution, setVisionResolution,
     isCudaAvailable
   } = useAppStore();
@@ -267,8 +270,11 @@ export default function Settings() {
                     type="number" 
                     step="0.1"
                     value={temperature}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTemperature(Number(e.target.value))}
-                  />
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setTemperature(Number(cleaned));
+                    }}                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="defMaxTokens">Default Max Tokens</Label>
@@ -276,7 +282,11 @@ export default function Settings() {
                     id="defMaxTokens" 
                     type="number" 
                     value={maxTokens}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMaxTokens(Number(e.target.value))}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setMaxTokens(Number(cleaned));
+                    }}
                   />
                 </div>
               </div>
@@ -289,7 +299,11 @@ export default function Settings() {
                     type="number" 
                     step="0.05"
                     value={topP}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTopP(Number(e.target.value))}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setTopP(Number(cleaned));
+                    }}
                   />
                 </div>
                 <div className="space-y-2">
@@ -298,29 +312,61 @@ export default function Settings() {
                     id="defTopK" 
                     type="number" 
                     value={topK}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTopK(Number(e.target.value))}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setTopK(Number(cleaned));
+                    }}
                   />
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="defSystemPrompt">Default System Prompt</Label>
-                <Textarea 
-                  id="defSystemPrompt" 
-                  value={systemPrompt}
-                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setSystemPrompt(e.target.value)}
-                  className="min-h-[100px]"
-                />
+              <div className="space-y-4 border p-4 rounded-lg bg-muted/20">
+                <h4 className="text-sm font-bold flex items-center gap-2">
+                  <FileText className="w-4 h-4" /> PDF Extraction Defaults
+                </h4>
+                <div className="space-y-2">
+                  <Label htmlFor="pdfSystemPrompt">Default System Prompt</Label>
+                  <Textarea 
+                    id="pdfSystemPrompt" 
+                    value={pdfSystemPrompt}
+                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPdfSystemPrompt(e.target.value)}
+                    className="min-h-[80px]"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pdfPromptText">Default User Instruction</Label>
+                  <Textarea 
+                    id="pdfPromptText" 
+                    value={pdfPromptText}
+                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPdfPromptText(e.target.value)}
+                    className="min-h-[80px]"
+                  />
+                </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="defPromptText">Default User Instruction</Label>
-                <Textarea 
-                  id="defPromptText" 
-                  value={promptText}
-                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPromptText(e.target.value)}
-                  className="min-h-[100px]"
-                />
+              <div className="space-y-4 border p-4 rounded-lg bg-muted/20">
+                <h4 className="text-sm font-bold flex items-center gap-2">
+                  <ImageIcon className="w-4 h-4" /> Image Analysis Defaults
+                </h4>
+                <div className="space-y-2">
+                  <Label htmlFor="imageSystemPrompt">Default System Prompt</Label>
+                  <Textarea 
+                    id="imageSystemPrompt" 
+                    value={imageSystemPrompt}
+                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setImageSystemPrompt(e.target.value)}
+                    className="min-h-[80px]"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="imagePromptText">Default User Instruction</Label>
+                  <Textarea 
+                    id="imagePromptText" 
+                    value={imagePromptText}
+                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setImagePromptText(e.target.value)}
+                    className="min-h-[80px]"
+                  />
+                </div>
               </div>
 
               <Separator className="my-4" />
@@ -335,7 +381,11 @@ export default function Settings() {
                     id="visionRes" 
                     type="number" 
                     value={visionResolution}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setVisionResolution(Number(e.target.value))}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setVisionResolution(Number(cleaned));
+                    }}
                   />
                   <p className="text-[10px] text-muted-foreground">Higher resolution improves OCR but uses more VRAM/RAM.</p>
                 </div>
@@ -469,7 +519,11 @@ export default function Settings() {
                     type="number"
                     placeholder="8080" 
                     value={serverPort}
-                    onChange={(e) => setServerPort(Number(e.target.value))}
+                    onChange={(e) => {
+                      const cleaned = removeLeadingZeros(e.target.value);
+                      e.target.value = cleaned;
+                      setServerPort(Number(cleaned));
+                    }}
                   />
                 </div>
               </div>

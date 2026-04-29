@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { FileText, Image as ImageIcon } from "lucide-react";
 
 export default function Home() {

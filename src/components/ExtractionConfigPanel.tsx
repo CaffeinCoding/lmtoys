@@ -36,6 +36,7 @@ interface ExtractionConfigPanelProps {
     isExtractDisabled?: boolean;
     extractButtonText?: string;
     hideTextMode?: boolean;
+    feature: "pdf" | "image";
 }
 
 export function ExtractionConfigPanel({
@@ -46,14 +47,17 @@ export function ExtractionConfigPanel({
     isExtractDisabled = false,
     extractButtonText = "Extract with LLM",
     hideTextMode = false,
+    feature,
 }: ExtractionConfigPanelProps) {
     const {
         llmMode,
         setLlmMode,
         extractionMode,
         setExtractionMode,
-        promptText,
-        setPromptText,
+        pdfPromptText,
+        setPdfPromptText,
+        imagePromptText,
+        setImagePromptText,
         provider,
         setProvider,
         modelName,
@@ -63,18 +67,20 @@ export function ExtractionConfigPanel({
         modelDownloadPath,
         temperature,
         setTemperature,
-        maxTokens,
-        setMaxTokens,
         topK,
         setTopK,
         topP,
         setTopP,
         cloudProvider,
         setCloudProvider,
-        systemPrompt,
-        setSystemPrompt,
-        customJsonFormat,
-        setCustomJsonFormat,
+        pdfSystemPrompt,
+        setPdfSystemPrompt,
+        imageSystemPrompt,
+        setImageSystemPrompt,
+        pdfJsonFormat,
+        setPdfJsonFormat,
+        imageJsonFormat,
+        setImageJsonFormat,
         repeatPenalty,
         setRepeatPenalty,
         nGpuLayers,
@@ -83,6 +89,15 @@ export function ExtractionConfigPanel({
         extractedText,
         suggestNgl,
     } = useAppStore();
+
+    const systemPrompt = feature === "pdf" ? pdfSystemPrompt : imageSystemPrompt;
+    const setSystemPrompt = feature === "pdf" ? setPdfSystemPrompt : setImageSystemPrompt;
+    
+    const promptText = feature === "pdf" ? pdfPromptText : imagePromptText;
+    const setPromptText = feature === "pdf" ? setPdfPromptText : setImagePromptText;
+
+    const jsonFormat = feature === "pdf" ? pdfJsonFormat : imageJsonFormat;
+    const setJsonFormat = feature === "pdf" ? setPdfJsonFormat : setImageJsonFormat;
 
     const [downloadedModels, setDownloadedModels] = useState<ModelInfo[]>([]);
     const [isJsonValid, setIsJsonValid] = useState(true);
@@ -95,12 +110,12 @@ export function ExtractionConfigPanel({
 
     useEffect(() => {
         try {
-            JSON.parse(customJsonFormat);
+            JSON.parse(jsonFormat);
             setIsJsonValid(true);
         } catch {
             setIsJsonValid(false);
         }
-    }, [customJsonFormat]);
+    }, [jsonFormat]);
 
     useEffect(() => {
         const refresh = () => {
@@ -355,19 +370,6 @@ export function ExtractionConfigPanel({
                     <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1.5">
                             <Label className="text-xs text-muted-foreground">
-                                Max Tokens
-                            </Label>
-                            <Input
-                                type="number"
-                                value={maxTokens}
-                                onChange={(e) =>
-                                    setMaxTokens(parseInt(e.target.value))
-                                }
-                                className="h-8 text-xs"
-                            />
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label className="text-xs text-muted-foreground">
                                 Top-K
                             </Label>
                             <Input
@@ -454,8 +456,8 @@ export function ExtractionConfigPanel({
                     </div>
                     <Textarea
                         placeholder='[{"key": "value"}]'
-                        value={customJsonFormat}
-                        onChange={(e) => setCustomJsonFormat(e.target.value)}
+                        value={jsonFormat}
+                        onChange={(e) => setJsonFormat(e.target.value)}
                         className="font-mono text-[11px] min-h-[120px] bg-muted/30 border-primary/10"
                     />
                 </div>

@@ -163,7 +163,7 @@ export default function PdfAnalysis() {
         setExtractedData,
         llmMode,
         extractionMode,
-        promptText,
+        pdfPromptText,
         provider,
         modelName,
         builtInModel,
@@ -172,8 +172,8 @@ export default function PdfAnalysis() {
         maxTokens,
         topK,
         topP,
-        systemPrompt,
-        customJsonFormat,
+        pdfSystemPrompt,
+        pdfJsonFormat,
         repeatPenalty,
         setIsStreaming,
         setExtractedText,
@@ -282,11 +282,11 @@ export default function PdfAnalysis() {
                 }
             }
 
-            const finalUserPrompt = extractionMode === "text" 
-                ? `Context from PDF:\n${pdfText}\n\nQuestion: ${promptText}`
-                : promptText;
+            const finalUserPrompt = extractionMode === "text"
+                ? `Context from PDF:\n${pdfText}\n\nQuestion: ${pdfPromptText}`
+                : pdfPromptText;
 
-            const finalSystemPrompt = `${systemPrompt}\n\nStrict JSON Format required:\n${customJsonFormat}`;
+            const finalSystemPrompt = `${pdfSystemPrompt}\n\nStrict JSON Format required:\n${pdfJsonFormat}`;
 
             let response;
 
@@ -431,24 +431,24 @@ export default function PdfAnalysis() {
                         const historyName = `${fileName}_${dateStr}`;
                         
                         const state = useAppStore.getState();
-                        const configSnapshot = {
-                            modelName: state.builtInModel || "unknown",
-                            llmMode: "local" as const,
-                            provider: "builtin",
-                            temperature: state.temperature,
-                            maxTokens: state.maxTokens,
-                            topP: state.topP,
-                            topK: state.topK,
-                            repeatPenalty: state.repeatPenalty,
-                            nGpuLayers: state.nGpuLayers,
-                            systemPrompt: state.systemPrompt,
-                            promptText: state.promptText,
-                            customJsonFormat: state.customJsonFormat,
-                            rawResponse: rawResponses.join("\n\n--- Next Page ---\n\n"),
-                            runtime: state.selectedRuntime,
-                            ttft: Math.round(firstTokenTime || 0),
-                            speed: totalTokens / totalDuration
-                        };
+                    const configSnapshot = {
+                        modelName: state.builtInModel || "unknown",
+                        llmMode: "local" as const,
+                        provider: "builtin",
+                        temperature: state.temperature,
+                        maxTokens: state.maxTokens,
+                        topP: state.topP,
+                        topK: state.topK,
+                        repeatPenalty: state.repeatPenalty,
+                        nGpuLayers: state.nGpuLayers,
+                        pdfSystemPrompt: state.pdfSystemPrompt,
+                        pdfPromptText: state.pdfPromptText,
+                        pdfJsonFormat: state.pdfJsonFormat,
+                        rawResponse: rawResponses.join("\n\n--- Next Page ---\n\n"),
+                        runtime: "LlamaServer (" + state.selectedRuntime.toUpperCase() + ")",
+                        ttft: Math.round(firstTokenTime || 0),
+                        speed: totalTokens / totalDuration
+                    };
 
                         useAppStore.getState().addHistoryItem({
                             id: crypto.randomUUID(),
@@ -525,9 +525,8 @@ export default function PdfAnalysis() {
                         topK: state.topK,
                         repeatPenalty: state.repeatPenalty,
                         nGpuLayers: state.nGpuLayers,
-                        systemPrompt: state.systemPrompt,
-                        promptText: state.promptText,
-                        customJsonFormat: state.customJsonFormat,
+                        pdfSystemPrompt: state.pdfSystemPrompt,
+                        pdfPromptText: state.pdfPromptText,                        pdfJsonFormat: state.pdfJsonFormat,
                         rawResponse: resultText,
                         runtime: state.selectedRuntime,
                         ttft: Math.round(firstTokenTime || 0),
@@ -619,9 +618,8 @@ export default function PdfAnalysis() {
                 topK: state.topK,
                 repeatPenalty: state.repeatPenalty,
                 nGpuLayers: state.nGpuLayers,
-                systemPrompt: state.systemPrompt,
-                promptText: state.promptText,
-                customJsonFormat: state.customJsonFormat,
+                pdfSystemPrompt: state.pdfSystemPrompt,
+                pdfPromptText: state.pdfPromptText,                pdfJsonFormat: state.pdfJsonFormat,
                 rawResponse: resultText,
                 runtime: state.llmMode === "local" ? (state.provider === "builtin" ? state.selectedRuntime : "External") : "Cloud",
                 ttft: state.timeToFirstToken,
@@ -642,9 +640,11 @@ export default function PdfAnalysis() {
             if (err.name === 'AbortError') {
                 console.log("Extraction aborted by user");
                 setExtractedText("Extraction stopped by user.");
+                setExtractionProgress(prev => prev ? { ...prev, message: "Stopped" } : { current: 0, total: 100, message: "Stopped" });
+                setIsExtracting(false);
+                setIsStreaming(false);
                 return;
-            }
-            console.error("Failed to extract data:", err);
+            }            console.error("Failed to extract data:", err);
             const errorMsg =
                 typeof err === "string" ? err : err?.message || String(err);
 
@@ -869,15 +869,15 @@ export default function PdfAnalysis() {
 
             {/* Right Panel: Controls & Extraction */}
             <div className="w-full lg:w-[400px] shrink-0 flex flex-col gap-6 overflow-y-auto pb-4 pr-1 text-card-foreground">
-                <ExtractionConfigPanel 
+                <ExtractionConfigPanel
                     handleExtract={handleExtract}
                     handleStopExtraction={handleStopExtraction}
                     isExtracting={isExtracting}
                     extractionProgress={extractionProgress}
                     isExtractDisabled={!currentPdfPath}
                     extractButtonText="Extract with LLM"
-                />
-            </div>
+                    feature="pdf"
+                />            </div>
         </div>
     );
 }

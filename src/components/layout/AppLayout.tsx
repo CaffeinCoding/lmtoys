@@ -14,9 +14,6 @@ export default function AppLayout() {
   const [isAnalysisOpen, setIsAnalysisOpen] = useState(true);
   
   const { 
-    setModelDownloadPath, 
-    setHfToken, 
-    setServerPort, 
     setSelectedRuntime, 
     setExtractionHistory,
     setLlmMode,
@@ -24,20 +21,25 @@ export default function AppLayout() {
     setProvider,
     setBuiltInModel,
     setModelName,
-    setTemperature,
-    setMaxTokens,
-    setTopP,
-    setTopK,
-    setRepeatPenalty,
+    setDefaultTemperature, setTemperature,
+    setDefaultMaxTokens, setMaxTokens,
+    setDefaultTopP, setTopP,
+    setDefaultTopK, setTopK,
+    setDefaultRepeatPenalty, setRepeatPenalty,
     setNGpuLayers,
-    setSystemPrompt,
-    setPromptText,
+    setDefaultPdfSystemPrompt, setPdfSystemPrompt,
+    setDefaultImageSystemPrompt, setImageSystemPrompt,
+    setDefaultPdfPromptText, setPdfPromptText,
+    setDefaultImagePromptText, setImagePromptText,
     setIsInitializing,
     setExtractionMode,
     setServerStatus,
     updateDownloadProgress,
     setVisionResolution,
-    setIsCudaAvailable
+    setIsCudaAvailable,
+    setHfToken,
+    setServerPort,
+    setModelDownloadPath
   } = useAppStore();
 
   useEffect(() => {
@@ -127,23 +129,56 @@ export default function AppLayout() {
         const history = await store.get<any[]>("extractionHistory");
         if (history) setExtractionHistory(history);
 
-        // 2. Load Parameters
+        // 2. Load Parameters into both Default and Active state
         const temp = await store.get<number>("temperature");
-        if (temp !== undefined && temp !== null) setTemperature(temp);
+        if (temp !== undefined && temp !== null) {
+          setDefaultTemperature(temp);
+          setTemperature(temp);
+        }
         const tokens = await store.get<number>("maxTokens");
-        if (tokens !== undefined && tokens !== null) setMaxTokens(tokens);
+        if (tokens !== undefined && tokens !== null) {
+          setDefaultMaxTokens(tokens);
+          setMaxTokens(tokens);
+        }
         const p = await store.get<number>("topP");
-        if (p !== undefined && p !== null) setTopP(p);
+        if (p !== undefined && p !== null) {
+          setDefaultTopP(p);
+          setTopP(p);
+        }
         const k = await store.get<number>("topK");
-        if (k !== undefined && k !== null) setTopK(k);
+        if (k !== undefined && k !== null) {
+          setDefaultTopK(k);
+          setTopK(k);
+        }
         const rep = await store.get<number>("repeatPenalty");
-        if (rep !== undefined && rep !== null) setRepeatPenalty(rep);
+        if (rep !== undefined && rep !== null) {
+          setDefaultRepeatPenalty(rep);
+          setRepeatPenalty(rep);
+        }
         const ngl = await store.get<number>("nGpuLayers");
         if (ngl !== undefined && ngl !== null) setNGpuLayers(ngl);
-        const sys = await store.get<string>("systemPrompt");
-        if (sys) setSystemPrompt(sys);
-        const prompt = await store.get<string>("promptText");
-        if (prompt) setPromptText(prompt);
+        
+        const pdfSys = await store.get<string>("pdfSystemPrompt");
+        if (pdfSys) {
+          setDefaultPdfSystemPrompt(pdfSys);
+          setPdfSystemPrompt(pdfSys);
+        }
+        const imgSys = await store.get<string>("imageSystemPrompt");
+        if (imgSys) {
+          setDefaultImageSystemPrompt(imgSys);
+          setImageSystemPrompt(imgSys);
+        }
+        
+        const pdfPrompt = await store.get<string>("pdfPromptText");
+        if (pdfPrompt) {
+          setDefaultPdfPromptText(pdfPrompt);
+          setPdfPromptText(pdfPrompt);
+        }
+        const imgPrompt = await store.get<string>("imagePromptText");
+        if (imgPrompt) {
+          setDefaultImagePromptText(imgPrompt);
+          setImagePromptText(imgPrompt);
+        }
 
         const downloadPath = await store.get<string>("modelDownloadPath");
         if (downloadPath) {
@@ -163,8 +198,10 @@ export default function AppLayout() {
                 if (settings.topK !== undefined) setTopK(settings.topK);
                 if (settings.repeatPenalty !== undefined) setRepeatPenalty(settings.repeatPenalty);
                 if (settings.nGpuLayers !== undefined) setNGpuLayers(settings.nGpuLayers);
-                if (settings.systemPrompt !== undefined) setSystemPrompt(settings.systemPrompt);
-                if (settings.promptText !== undefined) setPromptText(settings.promptText);
+                if (settings.pdfSystemPrompt !== undefined) setPdfSystemPrompt(settings.pdfSystemPrompt);
+                if (settings.imageSystemPrompt !== undefined) setImageSystemPrompt(settings.imageSystemPrompt);
+                if (settings.pdfPromptText !== undefined) setPdfPromptText(settings.pdfPromptText);
+                if (settings.imagePromptText !== undefined) setImagePromptText(settings.imagePromptText);
               }
             } catch (e) {
               console.error("Failed to load model-specific settings during init", e);

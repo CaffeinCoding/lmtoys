@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useAppStore } from "@/store/useAppStore";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import * as XLSX from "xlsx";
@@ -254,7 +254,7 @@ export default function DataViewer() {
                     <Zap className="w-3 h-3" /> System Prompt
                   </div>
                   <div className="text-[11px] bg-background/50 p-2 rounded border max-h-32 overflow-y-auto whitespace-pre-wrap italic">
-                    {selectedHistoryItem.config.systemPrompt || "No system prompt used."}
+                    {selectedHistoryItem.config.pdfSystemPrompt || selectedHistoryItem.config.imageSystemPrompt || (selectedHistoryItem.config as any).systemPrompt || "No system prompt used."}
                   </div>
                 </div>
                 <div className="space-y-1">
@@ -262,15 +262,15 @@ export default function DataViewer() {
                     <FileText className="w-3 h-3" /> User Prompt
                   </div>
                   <div className="text-[11px] bg-background/50 p-2 rounded border max-h-32 overflow-y-auto whitespace-pre-wrap">
-                    {selectedHistoryItem.config.promptText || "No user prompt data."}
+                    {selectedHistoryItem.config.pdfPromptText || selectedHistoryItem.config.imagePromptText || (selectedHistoryItem.config as any).promptText || "No user prompt data."}
                   </div>
                 </div>
                 <div className="space-y-1">
                   <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
                     <Database className="w-3 h-3" /> JSON Format
                   </div>
-                  <div className="text-[11px] bg-background/50 p-2 rounded border max-h-32 overflow-y-auto whitespace-pre-wrap font-mono">
-                    {selectedHistoryItem.config.customJsonFormat || "No format specified."}
+                  <div className="text-[11px] bg-background/50 p-2 rounded border max-h-48 overflow-y-auto whitespace-pre-wrap font-mono">
+                    {selectedHistoryItem.config.pdfJsonFormat || selectedHistoryItem.config.imageJsonFormat || (selectedHistoryItem.config as any).customJsonFormat || "No format specified."}
                   </div>
                 </div>
               </div>

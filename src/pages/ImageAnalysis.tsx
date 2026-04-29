@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile, readDir } from "@tauri-apps/plugin-fs";
@@ -68,9 +68,9 @@ export default function ImageAnalysis() {
     modelName,
     builtInModel,
     provider,
-    systemPrompt,
-    promptText,
-    customJsonFormat,
+    imageSystemPrompt,
+    imagePromptText,
+    imageJsonFormat,
     setExtractedData,
     addHistoryItem,
     temperature,
@@ -82,12 +82,14 @@ export default function ImageAnalysis() {
     setExtractedText,
     setTokensPerSecond,
     setTimeToFirstToken,
-    modelDownloadPath
+    modelDownloadPath,
+    imageFolderPath,
+    setImageFolderPath,
+    selectedImages: storeSelectedImages,
+    setSelectedImages: setStoreSelectedImages
   } = useAppStore();
 
-  const [folderPath, setFolderPath] = useState<string | null>(null);
   const [images, setImages] = useState<ImageItem[]>([]);
-  const [selectedImages, setSelectedImages] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractionProgress, setExtractionProgress] = useState<{current: number, total: number, message: string} | null>(null);
@@ -95,6 +97,43 @@ export default function ImageAnalysis() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Sync store SelectedImages (string[]) with local Set<string> for easier manipulation
+  const [selectedImages, setSelectedImages] = useState<Set<string>>(new Set(storeSelectedImages));
+
+  // Auto-load images if imageFolderPath exists in store
+  useEffect(() => {
+    async function loadImages() {
+      if (imageFolderPath && images.length === 0) {
+        setIsLoading(true);
+        try {
+          const entries = await readDir(imageFolderPath);
+          const imageExtensions = [".png", ".jpg", ".jpeg", ".webp"];
+          const imageFiles = entries
+            .filter((entry) => 
+              entry.isFile && 
+              imageExtensions.some(ext => entry.name.toLowerCase().endsWith(ext))
+            )
+            .map((entry) => ({
+              name: entry.name,
+              path: `${imageFolderPath}\\${entry.name}`,
+              url: convertFileSrc(`${imageFolderPath}\\${entry.name}`),
+            }));
+          setImages(imageFiles);
+        } catch (e) {
+          console.error("Failed to auto-load images", e);
+        } finally {
+          setIsLoading(false);
+        }
+      }
+    }
+    loadImages();
+  }, [imageFolderPath, images.length]);
+
+  // Sync local selection back to store
+  useEffect(() => {
+    setStoreSelectedImages(Array.from(selectedImages));
+  }, [selectedImages, setStoreSelectedImages]);
 
   const handleOpenFolder = async () => {
     try {
@@ -104,7 +143,7 @@ export default function ImageAnalysis() {
       });
 
       if (selected && typeof selected === "string") {
-        setFolderPath(selected);
+        setImageFolderPath(selected);
         setIsLoading(true);
         setSelectedImages(new Set()); // Reset selection
         setErrorMsg(null);
@@ -170,8 +209,8 @@ export default function ImageAnalysis() {
     abortControllerRef.current = controller;
 
     try {
-      const finalSystemPrompt = `${systemPrompt}\n\nStrict JSON Format required:\n${customJsonFormat}`;
-      const finalUserPrompt = promptText;
+      const finalSystemPrompt = `${imageSystemPrompt}\n\nStrict JSON Format required:\n${imageJsonFormat}`;
+      const finalUserPrompt = imagePromptText;
 
       let resultText = "";
       let parsedData: any[] | null = null;
@@ -327,12 +366,18 @@ export default function ImageAnalysis() {
           modelName: llmMode === "local" ? builtInModel : modelName,
           llmMode,
           provider: llmMode === "local" ? provider : "openai",
-          systemPrompt,
-          promptText,
-          customJsonFormat,
+          temperature,
+          maxTokens,
+          topP,
+          topK,
+          repeatPenalty,
+          nGpuLayers: llmMode === "local" ? useAppStore.getState().nGpuLayers : undefined,
+          imageSystemPrompt,
+          imagePromptText,
+          imageJsonFormat,
           rawResponse: resultText,
-          runtime: llmMode === "local" ? "LlamaServer" : "Cloud",
-          imageFolderPath: folderPath,
+          runtime: llmMode === "local" ? useAppStore.getState().selectedRuntime.toUpperCase() : "Cloud",
+          imageFolderPath: imageFolderPath,
           ttft: firstTokenTime ? Math.round(firstTokenTime) : undefined,
           speed: totalTokens > 0 ? totalTokens / totalDuration : undefined
       };
@@ -350,6 +395,10 @@ export default function ImageAnalysis() {
       if (err.name === 'AbortError') {
         console.log("Analysis aborted");
         setExtractedText("Extraction stopped by user.");
+        setExtractionProgress(prev => prev ? { ...prev, message: "Stopped" } : { current: 0, total: 100, message: "Stopped" });
+        setIsExtracting(false);
+        setIsStreaming(false);
+        return;
       } else {
         console.error("Failed to analyze images:", err);
         setErrorMsg(err.message || String(err));
@@ -357,7 +406,8 @@ export default function ImageAnalysis() {
     } finally {
       setIsExtracting(false);
       setIsStreaming(false);
-      setExtractionProgress(null);
+      // Only clear progress if it's NOT in the "Stopped" state
+      setExtractionProgress(prev => prev?.message === "Stopped" ? prev : null);
       abortControllerRef.current = null;
     }
   };
@@ -378,7 +428,7 @@ export default function ImageAnalysis() {
                 {errorMsg}
               </div>
             )}
-            {folderPath && images.length > 0 && (
+            {imageFolderPath && images.length > 0 && (
               <Button variant="outline" onClick={handleSelectAll} disabled={isExtracting}>
                 {selectedImages.size === images.length ? (
                   <><Square className="w-4 h-4 mr-2" /> Deselect All</>
@@ -387,9 +437,9 @@ export default function ImageAnalysis() {
                 )}
               </Button>
             )}
-            <Button onClick={handleOpenFolder} variant={folderPath ? "secondary" : "default"} disabled={isExtracting}>
+            <Button onClick={handleOpenFolder} variant={imageFolderPath ? "secondary" : "default"} disabled={isExtracting}>
               <FolderOpen className="w-4 h-4 mr-2" />
-              {folderPath ? "Change Folder" : "Open Folder"}
+              {imageFolderPath ? "Change Folder" : "Open Folder"}
             </Button>
           </div>
         </div>
@@ -397,7 +447,7 @@ export default function ImageAnalysis() {
         <Card className="flex-1 flex flex-col min-h-0 overflow-hidden border-primary/20">
           <CardHeader className="py-4 border-b shrink-0 flex flex-row items-center justify-between">
             <CardTitle className="text-lg">
-              {folderPath ? `Images in ${folderPath.split('\\').pop() || folderPath.split('/').pop()}` : "No Folder Selected"}
+              {imageFolderPath ? `Images in ${imageFolderPath.split('\\').pop() || imageFolderPath.split('/').pop()}` : "No Folder Selected"}
             </CardTitle>
             {images.length > 0 && (
               <div className="text-sm font-medium text-muted-foreground bg-muted px-3 py-1 rounded-full">
@@ -441,10 +491,10 @@ export default function ImageAnalysis() {
                           isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
                         )}>
                           <div className={cn(
-                            "w-6 h-6 rounded-md flex items-center justify-center border shadow-sm transition-colors",
+                            "w-6 h-6 sm:w-5 sm:h-5 rounded-md flex items-center justify-center border shadow-sm transition-colors",
                             isSelected ? "bg-primary border-primary text-primary-foreground" : "bg-background/80 border-muted-foreground/50 text-transparent backdrop-blur-sm"
                           )}>
-                            <CheckSquare className={cn("w-4 h-4", isSelected ? "block" : "hidden")} />
+                            <CheckSquare className={cn("w-4 h-4 sm:w-3.5 sm:h-3.5", isSelected ? "block" : "hidden")} />
                           </div>
                         </div>
 
@@ -452,13 +502,13 @@ export default function ImageAnalysis() {
                           <Button 
                             size="icon" 
                             variant="secondary" 
-                            className="w-8 h-8 rounded-full bg-background/80 backdrop-blur-sm hover:bg-background shadow-sm"
+                            className="w-8 h-8 sm:w-7 sm:h-7 rounded-full bg-background/80 backdrop-blur-sm hover:bg-background shadow-sm"
                             onClick={(e) => {
                               e.stopPropagation();
                               if (!isExtracting) setPreviewIndex(index);
                             }}
                           >
-                            <Maximize2 className="w-4 h-4 text-foreground" />
+                            <Maximize2 className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-foreground" />
                           </Button>
                         </div>
 
@@ -472,7 +522,7 @@ export default function ImageAnalysis() {
                   })}
                 </div>
               </ScrollArea>
-            ) : folderPath ? (
+            ) : imageFolderPath ? (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground">
                 <ImageIcon className="w-16 h-16 mb-4 opacity-20" />
                 <p>No images found in this folder.</p>
@@ -501,7 +551,7 @@ export default function ImageAnalysis() {
 
       {/* Right Panel: Controls & Extraction */}
       <div className="w-full lg:w-[400px] shrink-0 flex flex-col gap-6 overflow-y-auto pb-4 pr-1 text-card-foreground">
-          <ExtractionConfigPanel 
+          <ExtractionConfigPanel
               handleExtract={handleAnalyze}
               handleStopExtraction={handleStopExtraction}
               isExtracting={isExtracting}
@@ -509,8 +559,8 @@ export default function ImageAnalysis() {
               isExtractDisabled={selectedImages.size === 0}
               extractButtonText={`Analyze ${selectedImages.size} Images`}
               hideTextMode={true}
-          />
-      </div>
+              feature="image"
+          />      </div>
     </div>
   );
 }
